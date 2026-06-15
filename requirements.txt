@@ -1,0 +1,11 @@
+# Open-end shock-tube change-detection analysis
+# Pure NumPy + Pillow; Matplotlib only for the optional diagnostic plots,
+# per-frame image dumps and MP4 movies. No SciPy / OpenCV / tifffile required.
+
+numpy>=1.21
+Pillow>=9.0
+matplotlib>=3.5   # only for --plots / --plot-timeline / --dump-frames / --movie
+
+# External tool (not a pip package): ffmpeg must be on PATH for --movie (MP4).
+#   macOS:          brew install ffmpeg
+#   Debian/Ubuntu:  sudo apt install ffmpeg
