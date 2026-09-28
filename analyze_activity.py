@@ -69,7 +69,8 @@ def analyze_event(ev, files, fnum_to_idx, p):
     idxs = list(range(a, b + 1))
 
     window = np.stack([cc.load_frame(files[i], p.row_lo, p.row_hi,
-                                     p.col_lo, p.col_hi) for i in idxs], axis=0)
+                                     p.col_lo, p.col_hi, p.rotate)
+                       for i in idxs], axis=0)
     # True for the detected event frames, False for the surrounding margin
     # frames (which supply the local quiescent baseline).
     core_mask = np.array([(i0 <= i <= i1) for i in idxs])
@@ -420,6 +421,8 @@ def build_parser():
     g.add_argument("--col-lo", type=int, default=None)
     g.add_argument("--col-hi", type=int, default=None)
     g.add_argument("--edge-margin", type=int, default=6)
+    g.add_argument("--rotate", type=int, default=0, choices=(0, 90, 180, 270),
+                   help="Rotate frames clockwise (match detection).")
 
     g = ap.add_argument_group("change detection (match detection)")
     g.add_argument("--smooth", type=int, default=5)

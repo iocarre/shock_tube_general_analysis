@@ -258,6 +258,7 @@ python3 detect_activity.py RUN --pix-k 5 --smooth 7 --min-area 12
 | `--row-lo` / `--row-hi` | all | Restrict the analysed rows. |
 | `--col-lo` / `--col-hi` | all | Restrict the analysed columns. |
 | `--edge-margin` | `6` | Pixels ignored at each border (unreliable optics edge). |
+| `--rotate` | `0` | Rotate frames clockwise by 0/90/180/270° after cropping (e.g. `90` to lay a vertical tube horizontally). Crop bounds stay in original-image coordinates; detection is unaffected, only output orientation changes. |
 | **Background / noise model** | | |
 | `--bg-sample` | `150` | Frames sampled uniformly to build the background. |
 | `--noise-floor-frac` | `0.25` | Floor on per-pixel σ (fraction of the median σ). |
@@ -350,6 +351,7 @@ context frames, then:
 | `--out-dir` | `analysis` | Output directory (created if needed). |
 | `--row-lo/hi`, `--col-lo/hi` | all | Region of interest (match Script 1). |
 | `--edge-margin` | `6` | Border pixels ignored (match Script 1). |
+| `--rotate` | `0` | Clockwise frame rotation (match Script 1). |
 | `--smooth` | `5` | Spatial pooling window (match Script 1). |
 | `--detrend-band` | `101` | Band-pass width (match Script 1). |
 | `--pix-k` | `6.0` | Per-pixel SNR threshold (match Script 1). |
@@ -412,8 +414,8 @@ Imported by both scripts; not run directly. Key contents:
 **Frame discovery & I/O**
 - `list_frames(input_dir, pattern)` — frame paths in temporal order.
 - `frame_number(path)` — integer frame number from a filename.
-- `load_frame(path, row_lo, row_hi, col_lo, col_hi)` — load a frame as a 2-D
-  float image, optionally cropped.
+- `load_frame(path, row_lo, row_hi, col_lo, col_hi, rotate)` — load a frame as
+  a 2-D float image, optionally cropped then rotated clockwise.
 
 **Background / noise & change detection** (pure NumPy, no SciPy)
 - `box2d_mean(img, k)` — k×k box average via a summed-area table, O(H·W).

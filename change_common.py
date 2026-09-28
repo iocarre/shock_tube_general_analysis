@@ -78,7 +78,8 @@ def frame_number(path):
     return int(m[-1]) if m else -1
 
 
-def load_frame(path, row_lo=None, row_hi=None, col_lo=None, col_hi=None):
+def load_frame(path, row_lo=None, row_hi=None, col_lo=None, col_hi=None,
+               rotate=0):
     """
     Load one frame as a 2-D float32 image, optionally cropped to a sub-window.
 
@@ -86,7 +87,12 @@ def load_frame(path, row_lo=None, row_hi=None, col_lo=None, col_hi=None):
     profile), change detection keeps the full 2-D image: the flow can appear
     anywhere, with any shape. A 1-D input is promoted to a single-row image.
 
-    row_lo/row_hi/col_lo/col_hi optionally restrict to a region of interest.
+    row_lo/row_hi/col_lo/col_hi optionally restrict to a region of interest,
+    given in the coordinates of the original (unrotated) image. ``rotate``
+    (0/90/180/270 degrees clockwise) is applied after the crop, e.g. to lay a
+    vertical tube horizontally; all downstream x/y coordinates are then in the
+    rotated frame. The processing is isotropic, so rotation changes only the
+    orientation of the outputs, not what is detected.
     """
     a = np.asarray(Image.open(path), dtype=np.float32)
     if a.ndim == 1:
@@ -97,12 +103,15 @@ def load_frame(path, row_lo=None, row_hi=None, col_lo=None, col_hi=None):
         a = a[row_lo:row_hi, :]
     if col_lo is not None or col_hi is not None:
         a = a[:, col_lo:col_hi]
+    if rotate:
+        a = np.rot90(a, k=-(int(rotate) // 90) % 4)
     return np.ascontiguousarray(a, dtype=np.float32)
 
 
-def frame_shape(path, row_lo=None, row_hi=None, col_lo=None, col_hi=None):
-    """Return the (height, width) of a frame after the same optional crop."""
-    return load_frame(path, row_lo, row_hi, col_lo, col_hi).shape
+def frame_shape(path, row_lo=None, row_hi=None, col_lo=None, col_hi=None,
+                rotate=0):
+    """Return the (height, width) of a frame after the same crop / rotation."""
+    return load_frame(path, row_lo, row_hi, col_lo, col_hi, rotate).shape
 
 
 # --------------------------------------------------------------------------- #
@@ -391,7 +400,8 @@ def build_background(files, p):
     n = len(files)
     idxs = sample_indices(n, p.bg_sample)
     stack = np.stack([load_frame(files[i], p.row_lo, p.row_hi,
-                                 p.col_lo, p.col_hi) for i in idxs], axis=0)
+                                 p.col_lo, p.col_hi, p.rotate)
+                      for i in idxs], axis=0)
 
     bg, sigma = estimate_bg_noise(stack, p.noise_floor_frac)
     sigma2 = sigma * sigma

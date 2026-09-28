@@ -69,7 +69,8 @@ def measure_all(files, model, p):
     fnum = np.zeros(n, dtype=np.int64)
 
     for i, path in enumerate(files):
-        frame = cc.load_frame(path, p.row_lo, p.row_hi, p.col_lo, p.col_hi)
+        frame = cc.load_frame(path, p.row_lo, p.row_hi, p.col_lo, p.col_hi,
+                              p.rotate)
         snr = cc.activity_snr(frame, model.bg, model.sigma2, p.smooth,
                               p.detrend_band)
         m = cc.measure_activity(snr, model.thresh, p.edge_margin)
@@ -202,6 +203,11 @@ def build_parser():
                    help="Last column (exclusive) of the analysed region.")
     g.add_argument("--edge-margin", type=int, default=6,
                    help="Pixels ignored at each border (unreliable optics edge).")
+    g.add_argument("--rotate", type=int, default=0, choices=(0, 90, 180, 270),
+                   help="Rotate frames clockwise by this many degrees after "
+                        "cropping (e.g. 90 to lay a vertical tube "
+                        "horizontally). Crop bounds stay in original-image "
+                        "coordinates.")
 
     g = ap.add_argument_group("background / noise model")
     g.add_argument("--bg-sample", type=int, default=150,
@@ -266,7 +272,8 @@ def main(argv=None):
     print(f"[detect] {n} frames in {p.input_dir!r}", file=sys.stderr)
 
     # Resolve an auto --min-area from the (cropped) frame size if not given.
-    h, w = cc.frame_shape(files[0], p.row_lo, p.row_hi, p.col_lo, p.col_hi)
+    h, w = cc.frame_shape(files[0], p.row_lo, p.row_hi, p.col_lo, p.col_hi,
+                          p.rotate)
     if p.min_area is None:
         p.min_area = max(8, int(round(p.min_area_frac * h * w)))
     print(f"[detect] frame {h}x{w} px; min-area = {p.min_area} px, "
