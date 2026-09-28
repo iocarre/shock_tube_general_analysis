@@ -8,3 +8,4 @@ venv/
 T*_analysis/
 *_events.csv
 *_timeline.png
+Test*/
