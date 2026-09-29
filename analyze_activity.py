@@ -18,15 +18,32 @@ Unlike the sister project there is **no assumed shape or straight-line motion**;
 the trajectory fit is a descriptive summary of where the activity's centroid
 goes, not an acceptance gate.
 
-For each event it writes a per-frame CSV and (optionally) two diagnostic PNGs:
-a montage of pooled-SNR difference images across the event with the active
-region outlined, and the centroid-trajectory / area-vs-time curves. A summary
-CSV aggregates one row per event.
+Each event also gets a **label** with its most likely cause (shock-candidate,
+slow-drift, camera, flash, global, stripe, vibration, particle, noise; see
+``event_overview``) and the reason for it.
+
+For each event it writes a per-frame CSV, two diagnostic PNGs (a montage of
+pooled-SNR difference images across the event with the active region outlined,
+and the centroid-trajectory / area-vs-time curves), a folder of treated
+per-frame images and an MP4 movie (when ffmpeg is installed). Each of these can
+be turned off (``--no-plots``, ``--no-dump-frames``, ``--no-movie``). A summary
+CSV aggregates one row per event, and ``<run>_overview.png`` answers "is anything
+seen?" for the whole recording: the shock-search verdict and sensitivity, the
+x-t diagram, the activity coloured by label, and one tile per event.
+``<run>_dashboard.html`` presents it all interactively in one self-contained
+file (see ``dashboard``).
+
+By default it reads ``<run>_analysis/<run>_events.csv`` and writes into the same
+folder, next to the frame folder; every file is prefixed with ``<run>`` and each
+event's files go into an ``event_<id>/`` subfolder. If the input folder holds no
+frames itself, each of its subfolders that does is processed in turn (batch
+mode), skipping those whose ``<run>_events_summary.csv`` exists unless
+``--force`` is given.
 
 Example
 -------
-    python3 analyze_activity.py run activity_events.csv --out-dir analysis \\
-        --px-size-um 50 --plots
+    python3 analyze_activity.py run                  # reads and fills run_analysis/
+    python3 analyze_activity.py run --px-size-um 50 --no-movie
 """
 
 from __future__ import annotations
@@ -34,11 +51,16 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import re
+import shutil
 import sys
+import time
 
 import numpy as np
 
 import change_common as cc
+import dashboard
+import event_overview as ov
 
 
 def load_events(path):
@@ -56,8 +78,9 @@ def local_background(window, core_mask, p):
     margin = window[~core_mask] if (~core_mask).sum() >= 5 else window
     bg, sigma = cc.estimate_bg_noise(margin, p.noise_floor_frac)
     sigma2 = sigma * sigma
-    inflation = cc.pooled_snr_scale(margin, bg, sigma2, p, p.edge_margin)
-    return bg, sigma2, p.pix_k * inflation
+    valid = cc.valid_mask(bg, p.edge_margin, p.dark_frac)
+    inflation = cc.pooled_snr_scale(margin, bg, sigma2, p, valid)
+    return bg, sigma2, p.pix_k * inflation, valid
 
 
 def analyze_event(ev, files, fnum_to_idx, p):
@@ -74,7 +97,7 @@ def analyze_event(ev, files, fnum_to_idx, p):
     # True for the detected event frames, False for the surrounding margin
     # frames (which supply the local quiescent baseline).
     core_mask = np.array([(i0 <= i <= i1) for i in idxs])
-    bg, sigma2, thresh = local_background(window, core_mask, p)
+    bg, sigma2, thresh, valid = local_background(window, core_mask, p)
 
     snr_stack = np.empty_like(window)
     rows = []
@@ -82,9 +105,7 @@ def analyze_event(ev, files, fnum_to_idx, p):
     for r, i in enumerate(idxs):
         snr = cc.activity_snr(window[r], bg, sigma2, p.smooth, p.detrend_band)
         snr_stack[r] = snr
-        mask = np.abs(snr) > thresh
-        if p.edge_margin > 0:
-            mask &= cc._edge_mask(snr.shape, p.edge_margin)
+        mask = (np.abs(snr) > thresh) & valid
 
         in_core = bool(i0 <= i <= i1)
         if not mask.any():
@@ -96,7 +117,8 @@ def analyze_event(ev, files, fnum_to_idx, p):
         wsum = float(w.sum())
         cx = float((xs * w).sum() / wsum)
         cy = float((ys * w).sum() / wsum)
-        blob_size, _ = cc.largest_blob(mask)
+        blob_size, blob = cc.largest_blob(mask)
+        by, bx = np.nonzero(blob)
         signed = float(snr[mask].mean())
 
         # Leading edge = farthest active pixel from where the event first
@@ -119,6 +141,8 @@ def analyze_event(ev, files, fnum_to_idx, p):
             "centroid_y": round(cy, 3),
             "bbox_w": int(xs.max() - xs.min() + 1),
             "bbox_h": int(ys.max() - ys.min() + 1),
+            "blob_w": int(bx.max() - bx.min() + 1),
+            "blob_h": int(by.max() - by.min() + 1),
             "leading_edge_px": round(lead, 3),
             "peak_snr": round(float(w.max()), 3),
             "energy": round(wsum, 2),
@@ -127,7 +151,8 @@ def analyze_event(ev, files, fnum_to_idx, p):
         })
 
     summary = summarize(ev, rows, p)
-    return summary, rows, (window, snr_stack, idxs, rows, p, thresh)
+    return summary, rows, (window, snr_stack, idxs, rows, p, thresh, valid,
+                           bg)
 
 
 def _empty_row(path, i, in_core):
@@ -135,6 +160,7 @@ def _empty_row(path, i, in_core):
         "frame": int(cc.frame_number(path)), "order_index": i,
         "in_core": in_core, "area_px": 0, "blob_px": 0,
         "centroid_x": "", "centroid_y": "", "bbox_w": 0, "bbox_h": 0,
+        "blob_w": 0, "blob_h": 0,
         "leading_edge_px": 0.0, "peak_snr": 0.0, "energy": 0.0,
         "mean_snr": 0.0, "polarity": "",
     }
@@ -177,15 +203,14 @@ def _empty_summary(ev, rows, p):
 
 def summarize(ev, rows, p):
     """Aggregate per-frame rows into one event summary, with a trajectory fit."""
-    # Prefer the active frames inside the detected core; fall back to any active
-    # frame in the window if the core itself shows none.
+    # Use the active frames inside the detected core only: the margin frames
+    # are context, and reporting them as the event would misplace it.
     core = [r for r in rows if r["in_core"] and r["area_px"] > 0]
     if not core:
-        core = [r for r in rows if r["area_px"] > 0]
-    if not core:
-        # No frame in the window crosses the local threshold -- the event was
-        # marginal under detection's global background but vanishes against the
-        # stricter local one. Emit a zeroed summary rather than crashing.
+        # No core frame crosses the local threshold -- the event was marginal
+        # under detection's global background (or is a flagged frame with a
+        # weak jump) and vanishes against the local one. Keep its declared
+        # frame range with zeroed measurements.
         return _empty_summary(ev, rows, p)
 
     t = np.array([r["order_index"] for r in core], dtype=np.float64)
@@ -252,7 +277,7 @@ def make_plots(eid, pack, out_prefix):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    _window, snr_stack, idxs, rows, p, thresh = pack
+    _window, snr_stack, idxs, rows, p, thresh, valid, _bg = pack
     nwin = snr_stack.shape[0]
     core_pos = [r for r in range(nwin) if rows[r]["in_core"]]
     lim = np.percentile(np.abs(snr_stack), 99.5) or 1.0
@@ -267,7 +292,7 @@ def make_plots(eid, pack, out_prefix):
     for ax, r in zip(axes[0], pick):
         ax.imshow(snr_stack[r], cmap="seismic", vmin=-lim, vmax=lim,
                   aspect="auto")
-        ax.contour(np.abs(snr_stack[r]) > thresh, levels=[0.5],
+        ax.contour((np.abs(snr_stack[r]) > thresh) & valid, levels=[0.5],
                    colors="lime", linewidths=0.8)
         row = rows[r]
         if row["centroid_x"] != "":
@@ -309,10 +334,10 @@ def make_plots(eid, pack, out_prefix):
     plt.close(fig)
 
 
-def dump_frames(eid, pack, out_dir):
+def dump_frames(eid, pack, sub):
     """
-    Write one treated image per frame of the event window into a per-event
-    subfolder: the raw grayscale camera frame with the detected active region
+    Write one treated image per frame of the event window into the folder
+    ``sub``: the raw grayscale camera frame with the detected active region
     outlined (lime) and the centroid marked (red x). Covers the full analysis
     window (detected core *plus* the +/- margin context frames).
     """
@@ -320,17 +345,14 @@ def dump_frames(eid, pack, out_dir):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    window, snr_stack, idxs, rows, p, thresh = pack
-    sub = os.path.join(out_dir, f"event_{eid}_frames")
+    window, snr_stack, idxs, rows, p, thresh, valid, _bg = pack
     os.makedirs(sub, exist_ok=True)
 
     h, w = window.shape[1], window.shape[2]
-    n = 0
+    paths = []
     for r in range(window.shape[0]):
         row = rows[r]
-        mask = np.abs(snr_stack[r]) > thresh
-        if p.edge_margin > 0:
-            mask &= cc._edge_mask(snr_stack[r].shape, p.edge_margin)
+        mask = (np.abs(snr_stack[r]) > thresh) & valid
 
         fig, ax = plt.subplots(figsize=(w / 100.0, h / 100.0 + 0.4))
         ax.imshow(window[r], cmap="gray", aspect="equal")
@@ -344,13 +366,13 @@ def dump_frames(eid, pack, out_dir):
                      f"({row['polarity'] or 'quiescent'})", fontsize=9)
         ax.set_xticks([]); ax.set_yticks([])
         fig.tight_layout()
-        fig.savefig(os.path.join(sub, f"frame_{row['frame']:09d}.png"), dpi=110)
+        paths.append(os.path.join(sub, f"frame_{row['frame']:09d}.png"))
+        fig.savefig(paths[-1], dpi=110)
         plt.close(fig)
-        n += 1
-    return sub, n
+    return sub, paths
 
 
-def make_movie(eid, pack, out_dir, movie_fps=12):
+def make_movie(eid, pack, path, movie_fps=12):
     """
     Render the event window as an MP4: the raw grayscale frame with the
     detected active region outlined (lime) and the centroid marked (red x),
@@ -361,7 +383,7 @@ def make_movie(eid, pack, out_dir, movie_fps=12):
     import matplotlib.pyplot as plt
     from matplotlib.animation import FuncAnimation, FFMpegWriter
 
-    window, snr_stack, idxs, rows, p, thresh = pack
+    window, snr_stack, idxs, rows, p, thresh, valid, _bg = pack
     h, w = window.shape[1], window.shape[2]
     vmin, vmax = float(window.min()), float(window.max())
 
@@ -377,9 +399,7 @@ def make_movie(eid, pack, out_dir, movie_fps=12):
         if state["contour"] is not None:
             state["contour"].remove()
             state["contour"] = None
-        mask = np.abs(snr_stack[r]) > thresh
-        if p.edge_margin > 0:
-            mask &= cc._edge_mask(snr_stack[r].shape, p.edge_margin)
+        mask = (np.abs(snr_stack[r]) > thresh) & valid
         if mask.any():
             state["contour"] = ax.contour(mask, levels=[0.5], colors="lime",
                                           linewidths=0.9)
@@ -397,7 +417,6 @@ def make_movie(eid, pack, out_dir, movie_fps=12):
 
     fig.tight_layout()
     anim = FuncAnimation(fig, draw, frames=window.shape[0], blit=False)
-    path = os.path.join(out_dir, f"event_{eid}.mp4")
     anim.save(path, writer=FFMpegWriter(fps=movie_fps, bitrate=2400), dpi=110)
     plt.close(fig)
     return path, window.shape[0]
@@ -410,10 +429,20 @@ def make_movie(eid, pack, out_dir, movie_fps=12):
 def build_parser():
     ap = argparse.ArgumentParser(
         description="Characterise detected change events.")
-    ap.add_argument("input_dir", help="Directory of single-frame TIFFs.")
-    ap.add_argument("events_csv", help="CSV from detect_activity.py.")
+    ap.add_argument("input_dir",
+                    help="Directory of single-frame TIFFs, or a directory of "
+                         "such directories (batch mode: each one is a shot).")
+    ap.add_argument("events_csv", nargs="?", default=None,
+                    help="CSV from detect_activity.py (default: "
+                         "NAME_events.csv in the output folder; single shot "
+                         "only).")
     ap.add_argument("--pattern", default="*.tif")
-    ap.add_argument("--out-dir", default="analysis", help="Output directory.")
+    ap.add_argument("--out-dir", default=None,
+                    help="Folder receiving every output of the shot "
+                         "(default: <input_dir>_analysis; single shot only).")
+    ap.add_argument("--force", action="store_true",
+                    help="In batch mode, reprocess shots whose outputs "
+                         "already exist.")
 
     g = ap.add_argument_group("region of interest (match detection)")
     g.add_argument("--row-lo", type=int, default=None)
@@ -429,72 +458,190 @@ def build_parser():
     g.add_argument("--detrend-band", type=int, default=101)
     g.add_argument("--pix-k", type=float, default=6.0)
     g.add_argument("--noise-floor-frac", type=float, default=0.25)
-    g.add_argument("--margin", type=int, default=10,
-                   help="Frames padded around each event for the local "
-                        "baseline and context.")
+    g.add_argument("--dark-frac", type=float, default=0.1,
+                   help="Ignore unlit pixels (match detection).")
 
     g = ap.add_argument_group("physical calibration (optional)")
     g.add_argument("--fps", type=float, default=None,
-                   help="Camera frame rate; auto-read from a .cihx if present.")
-    g.add_argument("--px-size-um", type=float, default=None,
-                   help="Pixel size in micrometres (for m/s and mm output); "
-                        "auto-read from a .cihx when spatially calibrated.")
+                   help="Camera frame rate; auto-read from a .cihx or .chd "
+                        "if present.")
 
-    ap.add_argument("--plots", action="store_true",
-                    help="Write diagnostic PNGs per event.")
-    ap.add_argument("--dump-frames", action="store_true",
-                    help="Write one treated image per frame (raw frame + "
-                         "detected-region outline) into a per-event subfolder.")
-    ap.add_argument("--movie", action="store_true",
-                    help="Render an MP4 per event (raw frame + detected-region "
-                         "outline) over the full core+margin window.")
-    ap.add_argument("--movie-fps", type=float, default=12.0,
-                    help="Playback frame rate of the MP4 (default 12).")
+    add_analysis_options(ap)
     return ap
 
 
-def main(argv=None):
-    p = build_parser().parse_args(argv)
-    os.makedirs(p.out_dir, exist_ok=True)
+def add_analysis_options(ap):
+    """
+    Options specific to the analysis step (the rest mirror detection). Shared
+    with full_detect_analysis.py, which adds them to the detection parser.
+    """
+    ap.add_argument("--margin", type=int, default=10,
+                    help="Frames padded around each event for the local "
+                         "baseline and context.")
+    ap.add_argument("--px-size-um", type=float, default=None,
+                    help="Pixel size in micrometres (for m/s and mm output); "
+                         "auto-read from a .cihx when spatially calibrated.")
 
+    g = ap.add_argument_group("analysis outputs (all on by default)")
+    g.add_argument("--plots", action=argparse.BooleanOptionalAction,
+                   default=True,
+                   help="Write diagnostic PNGs per event.")
+    g.add_argument("--dump-frames", action=argparse.BooleanOptionalAction,
+                   default=True,
+                   help="Write one treated image per frame (raw frame + "
+                        "detected-region outline) into a per-event subfolder.")
+    g.add_argument("--movie", action=argparse.BooleanOptionalAction,
+                   default=True,
+                   help="Render an MP4 per event (raw frame + detected-region "
+                        "outline) over the full core+margin window. Skipped "
+                        "with a warning if ffmpeg is not installed.")
+    g.add_argument("--movie-fps", type=float, default=12.0,
+                   help="Playback frame rate of the MP4 (default 12).")
+    g.add_argument("--dashboard", action=argparse.BooleanOptionalAction,
+                   default=True,
+                   help="Write NAME_dashboard.html (self-contained, "
+                        "interactive) for each shot, and the campaign "
+                        "dashboard after a batch run.")
+    g.add_argument("--overview", action=argparse.BooleanOptionalAction,
+                   default=True,
+                   help="Write NAME_overview.png: shock-search verdict, x-t "
+                        "diagram, activity and one tile per event with its "
+                        "label.")
+
+
+def resolve_outputs(p):
+    """Fill in this shot's output paths (see cc.ShotPaths)."""
+    p.paths = cc.shot_paths(p.input_dir, p.out_dir)
+    p.out_dir = p.paths.dir
+    if p.events_csv is None:
+        p.events_csv = p.paths.events
+
+
+def check_movie(p):
+    """Turn --movie off, with a warning, when ffmpeg cannot be found."""
+    if p.movie and not cc.ffmpeg_available():
+        print("[analyze] WARNING: ffmpeg not found, skipping the MP4 movies "
+              "(install ffmpeg, or pass --no-movie to silence this)",
+              file=sys.stderr)
+        p.movie = False
+
+
+def main(argv=None):
+    ap = build_parser()
+    p = ap.parse_args(argv)
+    shots, batch = cc.find_shots(p.input_dir, p.pattern)
+    cc.check_batch_args(ap, p, batch, ["events_csv", "--out-dir"])
+    check_movie(p)
+
+    def process(shot):
+        q = argparse.Namespace(**vars(p))
+        q.input_dir = shot
+        resolve_outputs(q)
+        if batch and not q.force and os.path.exists(q.paths.summary):
+            return f"{q.paths.summary} exists; use --force to redo"
+        if batch and not os.path.exists(q.events_csv):
+            return f"no {q.events_csv}; run detect_activity.py first"
+        run(q)
+
+    code = cc.run_shots("analyze", shots, batch, process)
+    dashboard.after_run(p.input_dir, batch, p.dashboard)
+    return code
+
+
+def prune(out_dir, written):
+    """
+    Remove what an earlier run left in the event and moment folders and this
+    run did not write again (events that no longer exist, a movie now switched
+    off, ...). Files are overwritten in place rather than deleted and
+    recreated, which cloud-synced folders (iCloud Desktop) handle better.
+    """
+    for name in os.listdir(out_dir):
+        path = os.path.join(out_dir, name)
+        if not (os.path.isdir(path) and
+                (re.fullmatch(r"event_\d+", name) or name == "moments")):
+            continue
+        if not any(w.startswith(path + os.sep) for w in written):
+            _remove_tree(path)
+            continue
+        for root, dirs, files in os.walk(path, topdown=False):
+            for f in files:
+                fp = os.path.join(root, f)
+                if f != ".DS_Store" and fp not in written:
+                    os.remove(fp)
+            for d in dirs:
+                dp = os.path.join(root, d)
+                if not any(w.startswith(dp + os.sep) for w in written):
+                    _remove_tree(dp)
+
+
+def _remove_tree(path):
+    """
+    Delete an old event folder. It is first renamed out of the way, so the new
+    one can be written even if deletion is slow; deletion is retried because
+    Finder or a cloud-sync client may drop a file (.DS_Store) in it meanwhile.
+    """
+    trash = os.path.join(os.path.dirname(path),
+                         f".old_{os.path.basename(path)}_{os.getpid()}")
+    os.rename(path, trash)
+    for _ in range(5):
+        shutil.rmtree(trash, ignore_errors=True)
+        if not os.path.exists(trash):
+            return
+        time.sleep(0.5)
+    print(f"[analyze] WARNING: could not fully delete {trash}; remove it by "
+          "hand", file=sys.stderr)
+
+
+def run(p):
+    """Analyse the events of one shot folder; ``p`` has its outputs resolved."""
+    os.makedirs(p.out_dir, exist_ok=True)
+    written = set()          # files of this run; older leftovers get pruned
+
+    files = cc.list_frames(p.input_dir, p.pattern)
     fps, px, _meta, info = cc.resolve_calibration(
-        p.input_dir, p.fps, p.px_size_um)
+        p.input_dir, p.fps, p.px_size_um, len(files))
     for line in info:
         print(f"[analyze] {line}", file=sys.stderr)
     p.fps, p.px_size_um = fps, px
-
-    files = cc.list_frames(p.input_dir, p.pattern)
     fnum_to_idx = {cc.frame_number(f): i for i, f in enumerate(files)}
 
     events = load_events(p.events_csv)
     print(f"[analyze] {len(events)} event(s) from {p.events_csv}",
           file=sys.stderr)
-    if not events:
-        print("[analyze] nothing to do.", file=sys.stderr)
-        return 0
 
-    summaries = []
+    summaries, tiles = [], []
     for ev in events:
         eid = ev.get("event_id", "?")
         summary, rows, pack = analyze_event(ev, files, fnum_to_idx, p)
+        tile = ov.classify(summary, ev, rows, pack, len(files))
+        tiles.append(tile)
         summaries.append(summary)
 
-        per_frame_path = os.path.join(p.out_dir, f"event_{eid}_frames.csv")
+        os.makedirs(p.paths.event_dir(eid), exist_ok=True)
+        prefix = p.paths.event_prefix(eid)
+        ov.save_tile(tile, prefix + "_peak.png")
+        per_frame_path = prefix + "_frames.csv"
+        written.update([prefix + "_peak.png", per_frame_path])
         with open(per_frame_path, "w", newline="") as fh:
             wcsv = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
             wcsv.writeheader()
             wcsv.writerows(rows)
 
         if p.plots:
-            make_plots(eid, pack, os.path.join(p.out_dir, f"event_{eid}"))
+            make_plots(eid, pack, prefix)
+            written.update([prefix + "_montage.png",
+                            prefix + "_trajectory.png"])
 
         if p.dump_frames:
-            sub, n = dump_frames(eid, pack, p.out_dir)
-            print(f"[analyze] event {eid}: wrote {n} frame image(s) -> {sub}",
-                  file=sys.stderr)
+            sub, fpaths = dump_frames(
+                eid, pack, os.path.join(p.paths.event_dir(eid), "frames"))
+            written.update(fpaths)
+            print(f"[analyze] event {eid}: wrote {len(fpaths)} frame image(s) "
+                  f"-> {sub}", file=sys.stderr)
 
         if p.movie:
-            mpath, n = make_movie(eid, pack, p.out_dir, p.movie_fps)
+            mpath, n = make_movie(eid, pack, prefix + ".mp4", p.movie_fps)
+            written.add(mpath)
             print(f"[analyze] event {eid}: wrote {n}-frame movie -> {mpath}",
                   file=sys.stderr)
 
@@ -504,11 +651,27 @@ def main(argv=None):
         print(f"[analyze] event {eid}: frames "
               f"{summary['start_frame']}-{summary['end_frame']} "
               f"({summary['n_frames_active']} active), {summary['polarity']}, "
-              f"peak area {summary['peak_area_px']} px, centroid {spd}",
+              f"peak area {summary['peak_area_px']} px, centroid {spd} "
+              f"-> {summary['label']} ({summary['label_reason']})",
               file=sys.stderr)
 
-    summary_path = os.path.join(p.out_dir, "events_summary.csv")
-    cols = []
+    moments = ov.load_moments(p.events_csv)
+    m_tiles = []
+    for m in moments:
+        pseudo = {"event_id": f"m{m['rank']}", "start_frame": m["frame"],
+                  "end_frame": m["frame"], "peak_frame": m["frame"]}
+        _s, rows, pack = analyze_event(pseudo, files, fnum_to_idx, p)
+        m_tiles.append(ov.moment_tile(m, rows, pack))
+        path = p.paths.moment_image(m["rank"])
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        ov.save_tile(m_tiles[-1], path)
+        written.add(path)
+    if p.overview:
+        path = ov.make_overview(p, summaries, tiles, files, moments, m_tiles)
+        print(f"[analyze] wrote {path}", file=sys.stderr)
+
+    summary_path = p.paths.summary
+    cols = list(ov.FIRST_COLS)
     for s in summaries:
         for k in s:
             if k not in cols:
@@ -519,7 +682,11 @@ def main(argv=None):
         for s in summaries:
             wcsv.writerow({c: s.get(c, "") for c in cols})
     print(f"[analyze] wrote {summary_path}", file=sys.stderr)
-    return 0
+
+    prune(p.out_dir, written)
+    if p.dashboard:
+        path = dashboard.build_shot(p.out_dir)
+        print(f"[analyze] wrote {path}", file=sys.stderr)
 
 
 if __name__ == "__main__":

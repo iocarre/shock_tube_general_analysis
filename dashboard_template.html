@@ -1,0 +1,904 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f3f2ee;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --accent: #2a78d6; --series: #2a78d6;
+  --div-neg: #2a78d6; --div-mid: #f0efec; --div-pos: #e34948;
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b; --info: #2a78d6;
+  --lab-shock-candidate: #2a78d6; --lab-slow-drift: #eb6834;
+  --lab-camera: #1baf7a; --lab-flash: #eda100; --lab-global: #e87ba4;
+  --lab-stripe: #008300; --lab-vibration: #4a3aa7; --lab-particle: #e34948;
+  --lab-noise: #898781; --lab-moment: #52514e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #222220;
+    --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --accent: #3987e5; --series: #3987e5;
+    --div-neg: #3987e5; --div-mid: #383835; --div-pos: #e66767;
+    --info: #3987e5;
+    --lab-shock-candidate: #3987e5; --lab-slow-drift: #d95926;
+    --lab-camera: #199e70; --lab-flash: #c98500; --lab-global: #d55181;
+    --lab-stripe: #008300; --lab-vibration: #9085e9; --lab-particle: #e66767;
+    --lab-noise: #898781; --lab-moment: #c3c2b7;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #222220;
+  --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --accent: #3987e5; --series: #3987e5;
+  --div-neg: #3987e5; --div-mid: #383835; --div-pos: #e66767;
+  --info: #3987e5;
+  --lab-shock-candidate: #3987e5; --lab-slow-drift: #d95926;
+  --lab-camera: #199e70; --lab-flash: #c98500; --lab-global: #d55181;
+  --lab-stripe: #008300; --lab-vibration: #9085e9; --lab-particle: #e66767;
+  --lab-noise: #898781; --lab-moment: #c3c2b7;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+#app { max-width: 1280px; margin: 0 auto; padding: 24px 16px 64px; }
+a { color: var(--accent); }
+h1 { font-size: 26px; margin: 0 0 2px; font-weight: 650; letter-spacing: -0.01em; }
+h2 { font-size: 17px; margin: 0 0 4px; font-weight: 600; }
+h3 { font-size: 14px; margin: 0 0 6px; font-weight: 600; }
+.sub { color: var(--ink-2); margin: 0 0 12px; }
+.muted { color: var(--muted); }
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 16px; margin: 16px 0;
+}
+.tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin: 16px 0; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.tile .label { color: var(--ink-2); font-size: 13px; }
+.tile .value { font-size: 26px; font-weight: 600; margin: 2px 0; }
+.tile .note { color: var(--ink-2); font-size: 12.5px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 1px 8px 1px 6px;
+  border: 1px solid var(--border); border-radius: 999px; font-size: 12.5px;
+  color: var(--ink); background: var(--surface); white-space: nowrap; margin: 1px 4px 1px 0;
+}
+.chip .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+button.chip { cursor: pointer; font: inherit; font-size: 12.5px; }
+button.chip[aria-pressed="true"] { border-color: var(--ink-2); background: var(--surface-2); font-weight: 600; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.btn {
+  font: inherit; font-size: 13px; padding: 3px 10px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--ink);
+}
+.btn:hover { border-color: var(--ink-2); }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: middle; }
+th { color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--ink); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr.clickable { cursor: pointer; }
+tbody tr.clickable:hover { background: var(--surface-2); }
+tbody tr.selected { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--accent); }
+.scroll-x { overflow-x: auto; }
+dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 0; font-size: 13px; }
+dl.kv dt { color: var(--ink-2); }
+dl.kv dd { margin: 0; font-variant-numeric: tabular-nums; }
+.grid2 { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.explorer { display: grid; grid-template-columns: 3fr 1fr 1fr; gap: 10px; position: relative; }
+.panel { position: relative; min-width: 0; }
+.panel .ptitle { font-size: 12.5px; color: var(--ink-2); margin-bottom: 4px; height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel canvas { position: absolute; image-rendering: pixelated; }
+.panel svg { position: absolute; left: 0; overflow: visible; }
+.hit { position: absolute; cursor: crosshair; }
+.axis text, .tick text { fill: var(--muted); font-size: 11px; }
+.gallery { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.gcard { border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--surface); cursor: pointer; }
+.gcard:hover, .gcard.selected { border-color: var(--ink-2); }
+.gcard img { width: 100%; display: block; border-radius: 4px; }
+.gcard .cap { font-size: 12.5px; color: var(--ink-2); margin-top: 6px; }
+.figs { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-items: start; }
+.figs figure { margin: 0; }
+.figs img { width: 100%; display: block; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+figcaption { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; }
+.checks { list-style: none; margin: 0; padding: 0; }
+.checks li { display: grid; grid-template-columns: 22px 1fr; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--grid); }
+.checks li:last-child { border-bottom: 0; }
+.icon { width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #fff; }
+.tip {
+  position: fixed; z-index: 10; pointer-events: none; max-width: 320px;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 10px; font-size: 12.5px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+}
+.tip b { font-weight: 600; }
+.tip .row { display: flex; gap: 8px; justify-content: space-between; }
+.tip .row span:last-child { font-variant-numeric: tabular-nums; }
+details > summary { cursor: pointer; color: var(--ink-2); margin: 4px 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12.5px; color: var(--ink-2); margin: 6px 0; }
+.legend .key { display: inline-flex; align-items: center; gap: 6px; }
+.legend .sw { width: 14px; height: 10px; border-radius: 2px; }
+.legend .ln { width: 16px; height: 0; border-top: 2px solid; }
+.thumb { width: 140px; height: 55px; display: block; border-radius: 4px; border: 1px solid var(--border); }
+.detail { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--grid); }
+.empty { color: var(--ink-2); font-style: italic; }
+.multi { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; }
+.multi .mname { font-size: 12.5px; color: var(--ink-2); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 760px) {
+  .explorer { grid-template-columns: 1fr; }
+  .multi { grid-template-columns: 70px 1fr; }
+}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="tip" class="tip" hidden></div>
+<script id="data" type="application/json">__DATA__</script>
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById("data").textContent);
+const $ = (q, r = document) => r.querySelector(q);
+const LABELS = ["shock-candidate", "slow-drift", "camera", "flash", "global",
+                "stripe", "vibration", "particle", "noise", "unlabelled"];
+const LABEL_HELP = {
+  "shock-candidate": "overlaps a moving front found by the shock search",
+  "slow-drift": "lasts a large part of the recording (illumination or background drift)",
+  "camera": "the camera changed its timing or exposure (trigger frame)",
+  "flash": "whole-frame brightness jump (flash, light glitch, sensor recovery)",
+  "global": "covers a large part of the field at once",
+  "stripe": "tall, narrow region across the tube: check by eye",
+  "vibration": "explained by a sub-pixel shift of the image",
+  "particle": "small compact blob: dust, droplet, particle",
+  "noise": "scattered pixels near the threshold",
+  "unlabelled": "analysed by an older version, without labels",
+};
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const labColor = l => cssVar("--lab-" + l) || cssVar("--muted");
+
+// ---------------------------------------------------------------- DOM helpers
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === "class") e.className = v;
+    else if (k === "html") e.innerHTML = v;
+    else if (k === "style" && typeof v === "object") Object.assign(e.style, v);
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids.flat(Infinity)) {
+    if (k === null || k === undefined || k === false) continue;
+    e.append(k.nodeType ? k : document.createTextNode(String(k)));
+  }
+  return e;
+}
+const NS = "http://www.w3.org/2000/svg";
+function s(tag, attrs, ...kids) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  for (const k of kids.flat(Infinity)) {
+    if (k === null || k === undefined || k === false) continue;
+    e.append(k.nodeType ? k : document.createTextNode(String(k)));
+  }
+  return e;
+}
+function fmt(v, d = 0) {
+  if (v === null || v === undefined || (typeof v === "number" && !isFinite(v))) return "–";
+  if (typeof v !== "number") return String(v);
+  return v.toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: d });
+}
+function fmtAuto(v) {
+  if (typeof v !== "number") return v === null || v === undefined ? "–" : String(v);
+  if (Number.isInteger(v)) return fmt(v, 0);
+  const a = Math.abs(v), d = a >= 100 ? 0 : a >= 10 ? 1 : a >= 1 ? 2 : 3;
+  return v.toLocaleString("en-US", { maximumFractionDigits: d });
+}
+function niceTicks(lo, hi, n = 5) {
+  if (!(hi > lo)) return [lo];
+  const raw = (hi - lo) / n, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(st => st >= raw) || 10 * mag;
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(10));
+  return out;
+}
+function lowerBound(arr, x) {
+  let lo = 0, hi = arr.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] < x) lo = m + 1; else hi = m; }
+  return lo;
+}
+function chip(label, count) {
+  if (!label) return h("span", { class: "muted" }, "unlabelled");
+  return h("span", { class: "chip", title: LABEL_HELP[label] || "" },
+    h("span", { class: "dot", style: { background: labColor(label) } }),
+    label + (count !== undefined ? " · " + count : ""));
+}
+function tile(label, value, note) {
+  return h("div", { class: "tile" }, h("div", { class: "label" }, label),
+    h("div", { class: "value" }, value), note ? h("div", { class: "note" }, note) : null);
+}
+function card(title, sub, ...content) {
+  return h("section", { class: "card" }, title ? h("h2", null, title) : null,
+    sub ? h("p", { class: "sub" }, sub) : null, ...content);
+}
+const TIP = document.getElementById("tip");
+function showTip(html, x, y) {
+  TIP.innerHTML = html; TIP.hidden = false;
+  const r = TIP.getBoundingClientRect();
+  let left = x + 14, top = y + 14;
+  if (left + r.width > innerWidth - 8) left = x - r.width - 14;
+  if (top + r.height > innerHeight - 8) top = y - r.height - 14;
+  TIP.style.left = Math.max(8, left) + "px"; TIP.style.top = Math.max(8, top) + "px";
+}
+function hideTip() { TIP.hidden = true; }
+const tipRow = (k, v) => `<div class="row"><span>${k}</span><span>${v}</span></div>`;
+
+function sortableTable(cols, rows, opts = {}) {
+  let key = opts.sortKey || null, dir = 1;
+  const table = h("table");
+  const thead = h("thead"), tbody = h("tbody");
+  table.append(thead, tbody);
+  function draw() {
+    thead.innerHTML = "";
+    thead.append(h("tr", null, cols.map(c => h("th", {
+      class: (c.num ? "num " : "") + (c.sort === false ? "" : "sortable"),
+      onclick: c.sort === false ? null : () => { dir = key === c.key ? -dir : 1; key = c.key; draw(); },
+    }, c.title + (key === c.key ? (dir > 0 ? " ▲" : " ▼") : "")))));
+    const sorted = rows.slice();
+    if (key) {
+      const col = cols.find(c => c.key === key);
+      const val = col.value || (r => r[key]);
+      sorted.sort((a, b) => {
+        const x = val(a), y = val(b);
+        if (x === y) return 0;
+        if (x === null || x === undefined) return 1;
+        if (y === null || y === undefined) return -1;
+        return (x < y ? -1 : 1) * dir;
+      });
+    }
+    tbody.innerHTML = "";
+    for (const r of sorted) {
+      const tr = h("tr", { class: opts.onRow ? "clickable" : "", onclick: opts.onRow ? () => opts.onRow(r, tr) : null },
+        cols.map(c => h("td", { class: c.num ? "num" : "" }, c.render ? c.render(r) : fmtAuto(r[c.key]))));
+      if (opts.isSelected && opts.isSelected(r)) tr.classList.add("selected");
+      tbody.append(tr);
+    }
+  }
+  draw();
+  table.redraw = draw;
+  return h("div", { class: "scroll-x" }, table);
+}
+
+// Bars: <= 24px thick, 4px rounded data end, square at the baseline.
+function barPath(x0, x1, y, t, r = 4) {
+  if (x1 - x0 < r) r = Math.max(0, x1 - x0);
+  return `M${x0},${y}H${x1 - r}Q${x1},${y} ${x1},${y + r}V${y + t - r}Q${x1},${y + t} ${x1 - r},${y + t}H${x0}Z`;
+}
+function hbar(items, o) {
+  // items: [{name, value, tip}] ; o: {width, unit, digits, ref, refLabel}
+  const W = o.width, left = 100, right = 56, bandH = 30, top = 6;
+  const vals = items.map(i => i.value).filter(v => typeof v === "number");
+  const max = Math.max(o.ref || 0, ...vals, 1e-9) * 1.05;
+  const H = top + items.length * bandH + 22;
+  const x = v => left + (W - left - right) * v / max;
+  const svg = s("svg", { width: W, height: H, style: "position:static" });
+  for (const t of niceTicks(0, max, 4)) {
+    svg.append(s("line", { x1: x(t), x2: x(t), y1: top, y2: H - 20, stroke: cssVar("--grid") }),
+      s("text", { x: x(t), y: H - 6, "text-anchor": "middle", class: "tick", fill: cssVar("--muted"), "font-size": 11 }, fmtAuto(t)));
+  }
+  svg.append(s("line", { x1: left, x2: left, y1: top, y2: H - 20, stroke: cssVar("--axis") }));
+  items.forEach((it, i) => {
+    const y = top + i * bandH, t = Math.min(24, bandH * 0.62), yb = y + (bandH - t) / 2;
+    svg.append(s("text", { x: left - 8, y: y + bandH / 2 + 4, "text-anchor": "end", fill: cssVar("--ink"), "font-size": 12 }, it.name));
+    if (typeof it.value !== "number") {
+      svg.append(s("text", { x: left + 6, y: y + bandH / 2 + 4, fill: cssVar("--muted"), "font-size": 12 }, "n/a"));
+      return;
+    }
+    const bar = s("path", { d: barPath(left, Math.max(left + 1, x(it.value)), yb, t), fill: it.color || cssVar("--series") });
+    const hit = s("rect", { x: left, y, width: W - left - right, height: bandH, fill: "transparent",
+      onmousemove: e => showTip(it.tip || `<b>${it.name}</b>${tipRow(o.label || "", fmt(it.value, o.digits) + (o.unit || ""))}`, e.clientX, e.clientY),
+      onmouseleave: hideTip });
+    svg.append(bar, s("text", { x: x(it.value) + 6, y: y + bandH / 2 + 4, fill: cssVar("--ink-2"), "font-size": 12 },
+      fmt(it.value, o.digits) + (o.unit || "")), hit);
+  });
+  if (o.ref) {
+    svg.append(s("line", { x1: x(o.ref), x2: x(o.ref), y1: top - 2, y2: H - 20, stroke: cssVar("--ink-2"), "stroke-width": 1.5 }),
+      s("text", { x: x(o.ref) + 4, y: top + 8, fill: cssVar("--ink-2"), "font-size": 11 }, o.refLabel || ""));
+  }
+  return svg;
+}
+function stackedBar(rows, o) {
+  // rows: [{name, parts: {label: n}}]
+  const W = o.width, left = 100, right = 40, bandH = 30, top = 6;
+  const tot = rows.map(r => Object.values(r.parts).reduce((a, b) => a + b, 0));
+  const max = Math.max(1, ...tot) * 1.05;
+  const H = top + rows.length * bandH + 22;
+  const x = v => left + (W - left - right) * v / max;
+  const svg = s("svg", { width: W, height: H, style: "position:static" });
+  for (const t of niceTicks(0, max, 4).filter(t => Number.isInteger(t)))
+    svg.append(s("line", { x1: x(t), x2: x(t), y1: top, y2: H - 20, stroke: cssVar("--grid") }),
+      s("text", { x: x(t), y: H - 6, "text-anchor": "middle", fill: cssVar("--muted"), "font-size": 11 }, t));
+  rows.forEach((r, i) => {
+    const y = top + i * bandH, t = Math.min(24, bandH * 0.62), yb = y + (bandH - t) / 2;
+    svg.append(s("text", { x: left - 8, y: y + bandH / 2 + 4, "text-anchor": "end", fill: cssVar("--ink"), "font-size": 12 }, r.name));
+    let acc = 0;
+    const parts = LABELS.filter(l => r.parts[l]);
+    parts.forEach((l, k) => {
+      const x0 = x(acc) + (k ? 1 : 0), x1 = x(acc + r.parts[l]) - (k < parts.length - 1 ? 1 : 0);
+      const last = k === parts.length - 1;
+      const seg = last ? s("path", { d: barPath(x0, x1, yb, t), fill: labColor(l) })
+                       : s("rect", { x: x0, y: yb, width: Math.max(0, x1 - x0), height: t, fill: labColor(l) });
+      seg.addEventListener("mousemove", e => showTip(`<b>${r.name}</b>${tipRow(l, r.parts[l])}`, e.clientX, e.clientY));
+      seg.addEventListener("mouseleave", hideTip);
+      svg.append(seg);
+      acc += r.parts[l];
+    });
+    svg.append(s("text", { x: x(tot[i]) + 6, y: y + bandH / 2 + 4, fill: cssVar("--ink-2"), "font-size": 12 }, tot[i]));
+  });
+  return svg;
+}
+function legend(labels) {
+  return h("div", { class: "legend" }, labels.map(l =>
+    h("span", { class: "key", title: LABEL_HELP[l] || "" }, h("span", { class: "sw", style: { background: labColor(l) } }), l)));
+}
+
+// ================================================================ SHOT PAGE
+const EX = { a: 0, b: 0, sel: null, filter: null };
+
+function shotPage(app) {
+  const V = D.verdict, M = D.meta || {};
+  app.append(h("div", null,
+    D.campaign_href ? h("a", { href: D.campaign_href }, "← Campaign dashboard") : null,
+    h("h1", null, D.name),
+    h("p", { class: "sub" }, "Shot dashboard · generated " + D.generated +
+      (M.device ? " · " + M.device : "") + (M.fps ? " · " + fmt(M.fps) + " fps" : ""))));
+
+  const tiles = h("div", { class: "tiles" });
+  if (V.search) {
+    tiles.append(tile("Shock search", V.n_cands ? `${V.n_cands} candidate${V.n_cands > 1 ? "s" : ""}` : "No front found",
+      `best track score ${fmt(V.best_score, 1)} (report threshold ${fmt(V.shock_k, 0)})`));
+    if (V.sens8 !== undefined && V.sens8 !== null)
+      tiles.append(tile("Sensitivity", fmt(V.sens8, 2) + " %",
+        "faintest full-height front reported over 8 frames (% of brightness)"));
+  } else tiles.append(tile("Shock search", "not run", "no detection data"));
+  const ev = h("div", { class: "note" }, Object.keys(V.labels).length ? LABELS.filter(l => V.labels[l]).map(l => chip(l, V.labels[l])) : "none detected");
+  tiles.append(h("div", { class: "tile" }, h("div", { class: "label" }, "Events"), h("div", { class: "value" }, V.n_events), ev));
+  if (D.flags) {
+    const nf = D.flags.camera.length + D.flags.flash.filter(f => !D.flags.camera.includes(f)).length;
+    tiles.append(tile("Flagged frames", nf, D.flags.trigger !== null ? `trigger at frame ${D.flags.trigger}` : "no trigger known"));
+  }
+  if (V.largest_moment)
+    tiles.append(tile("Strongest moment below threshold", fmt(V.largest_moment.area) + " px",
+      `at frame ${V.largest_moment.frame}; noise also produces such moments`));
+  app.append(tiles);
+
+  if (D.has_detection) app.append(explorerCard());
+  else app.append(card("Reduced dashboard", null, h("p", null,
+    "These results come from an older version of the analysis: there is no detection data (NAME_activity.npz), " +
+    "so no x–t diagram, labels, strongest moments or camera information. Re-run the analysis with --force " +
+    "on the recording to get the full dashboard.")));
+  app.append(eventsCard());
+  if (D.has_detection) app.append(momentsCard());
+  if (V.search) app.append(candidatesCard());
+  if (D.has_detection) app.append(infoCard());
+  const st = D.static || {};
+  if (st.overview || st.timeline)
+    app.append(card("Static figures", "The same results as the PNG files in the analysis folder.",
+      h("details", null, h("summary", null, "Show the overview and timeline figures"),
+        h("div", { class: "figs" },
+          st.overview ? h("figure", null, h("img", { src: st.overview, alt: "Overview figure" }), h("figcaption", null, "Overview")) : null,
+          st.timeline ? h("figure", null, h("img", { src: st.timeline, alt: "Timeline figure" }), h("figcaption", null, "Timeline")) : null))));
+}
+
+let OFF = null;   // offscreen x-t image, rebuilt on theme change
+function buildHeat() {
+  const X = D.xt, raw = atob(X.data);
+  const img = new ImageData(X.cols, X.rows);
+  const hex = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16));
+  const neg = hex(cssVar("--div-neg")), mid = hex(cssVar("--div-mid")), pos = hex(cssVar("--div-pos"));
+  for (let i = 0; i < raw.length; i++) {
+    let v = (raw.charCodeAt(i) << 24 >> 24) / 127;          // int8 -> [-1, 1]
+    const end = v < 0 ? neg : pos, a = Math.min(1, Math.abs(v));
+    for (let c = 0; c < 3; c++) img.data[4 * i + c] = mid[c] + (end[c] - mid[c]) * a;
+    img.data[4 * i + 3] = 255;
+  }
+  OFF = document.createElement("canvas");
+  OFF.width = X.cols; OFF.height = X.rows;
+  OFF.getContext("2d").putImageData(img, 0, 0);
+}
+
+function explorerCard() {
+  const S = D.series, n = S.frame.length;
+  if (!EX.b) { EX.a = 0; EX.b = n; }
+  if (!OFF) buildHeat();
+  const rawXT = atob(D.xt.data);
+  const zAt = (r, c) => (rawXT.charCodeAt(r * D.xt.cols + c) << 24 >> 24) / 127 * 4;
+  const idxOfFrame = f => Math.min(n - 1, Math.max(0, lowerBound(S.frame, f + 0.5) - 1));
+  const H = Math.round(Math.min(560, Math.max(340, innerHeight * 0.58)));
+  const ML = 58, MB = 26;
+
+  const wrap = h("div", { class: "explorer" });
+  const pHeat = h("div", { class: "panel" }, h("div", { class: "ptitle" }, "x–t diagram: change along the tube, frames downwards"));
+  const pAct = h("div", { class: "panel" }, h("div", { class: "ptitle" }, "Active area (px, log scale)"));
+  const pLvl = h("div", { class: "panel" }, h("div", { class: "ptitle" }, "Mean brightness change (%)"));
+  wrap.append(pHeat, pAct, pLvl);
+  const canvas = h("canvas");
+  pHeat.append(canvas);
+  const svgs = [pHeat, pAct, pLvl].map(p => { const sv = s("svg"); p.append(sv); return sv; });
+  const hits = [pHeat, pAct, pLvl].map(p => { const d = h("div", { class: "hit" }); p.append(d); return d; });
+
+  const eventsIdx = D.events.map(e => ({ e, a: idxOfFrame(e.fields.start_frame), b: idxOfFrame(e.fields.end_frame) }));
+  const momIdx = D.moments.map(m => ({ m, i: idxOfFrame(m.frame) }));
+  const flagged = [...new Set([...(D.flags.camera || []), ...(D.flags.flash || [])])].map(idxOfFrame);
+  let drag = null;
+
+  function draw() {
+    const a = EX.a, b = EX.b, span = b - a;
+    const y = i => 20 + (i - a) / span * H;
+    // --- heat
+    const wHeat = pHeat.clientWidth - ML, dpr = devicePixelRatio || 1;
+    Object.assign(canvas.style, { left: ML + "px", top: "20px", width: wHeat + "px", height: H + "px" });
+    canvas.width = Math.max(1, Math.round(wHeat * dpr)); canvas.height = Math.round(H * dpr);
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(OFF, 0, a, D.xt.cols, span, 0, 0, canvas.width, canvas.height);
+    const widthPx = D.xt.cols * D.xt.xbin;
+    const xh = px => ML + px / widthPx * wHeat;
+    const svH = svgs[0];
+    svH.setAttribute("width", pHeat.clientWidth); svH.setAttribute("height", H + 20 + MB);
+    svH.innerHTML = "";
+    const ticksI = niceTicks(S.frame[a], S.frame[b - 1], 6);
+    for (const f of ticksI) {
+      const yy = y(idxOfFrame(f));
+      svH.append(s("line", { x1: ML - 4, x2: ML, y1: yy, y2: yy, stroke: cssVar("--axis") }),
+        s("text", { x: ML - 6, y: yy + 4, "text-anchor": "end", fill: cssVar("--muted"), "font-size": 11 }, f));
+    }
+    for (const px of niceTicks(0, widthPx, 6)) {
+      svH.append(s("text", { x: xh(px), y: H + 20 + 16, "text-anchor": "middle", fill: cssVar("--muted"), "font-size": 11 }, px));
+    }
+    for (const i of flagged) if (i >= a && i < b)
+      svH.append(s("line", { x1: ML, x2: ML + wHeat, y1: y(i + 0.5), y2: y(i + 0.5), stroke: cssVar("--muted"), "stroke-width": 1.5, opacity: 0.8 }));
+    for (const c of D.cands) {
+      const i0 = idxOfFrame(c.start_frame), i1 = idxOfFrame(c.end_frame);
+      for (const off of [-16, 16])
+        svH.append(s("line", { x1: xh(c.x0_px + off), x2: xh(c.x_end_px + off), y1: y(i0), y2: y(i1 + 1), stroke: cssVar("--ink"), "stroke-width": 1.5, "stroke-dasharray": "4 3" }));
+    }
+    for (const { m, i } of momIdx) if (i >= a && i < b && m.area > 0)
+      svH.append(s("circle", { cx: xh(m.cx), cy: y(i + 0.5), r: 6, fill: "none", stroke: cssVar("--ink"), "stroke-width": 1.5 }));
+    for (const { e, a: ea, b: eb } of eventsIdx) if (eb >= a && ea < b)
+      svH.append(s("rect", { x: ML - 10, y: y(Math.max(a, ea)), width: 5, height: Math.max(3, y(Math.min(b, eb + 1)) - y(Math.max(a, ea))), rx: 1, fill: labColor(e.label) }));
+
+    // --- activity (symlog) and brightness
+    const drawCurve = (p, sv, vals, scale, ticks, fmtT, extra) => {
+      const W = p.clientWidth - 8;
+      sv.setAttribute("width", p.clientWidth); sv.setAttribute("height", H + 20 + MB); sv.innerHTML = "";
+      for (const t of ticks) {
+        sv.append(s("line", { x1: scale(t, W), x2: scale(t, W), y1: 20, y2: H + 20, stroke: cssVar("--grid") }),
+          s("text", { x: scale(t, W), y: H + 20 + 16, "text-anchor": "middle", fill: cssVar("--muted"), "font-size": 11 }, fmtT(t)));
+      }
+      if (extra) extra(sv, W);
+      const step = Math.max(1, Math.floor(span / (H * 2)));
+      let d = "";
+      for (let i = a; i < b; i += step) {
+        let v = vals[i];
+        if (step > 1) for (let k = i; k < Math.min(b, i + step); k++) if (Math.abs(vals[k]) > Math.abs(v)) v = vals[k];
+        d += (d ? "L" : "M") + scale(v, W).toFixed(1) + "," + y(i + 0.5).toFixed(1);
+      }
+      sv.append(s("path", { d, fill: "none", stroke: cssVar("--series"), "stroke-width": 1.5, "stroke-linejoin": "round" }));
+    };
+    const amax = Math.max(10, ...S.area.slice(a, b));
+    const la = v => Math.log10(1 + Math.max(0, v));
+    const sA = (v, W) => 4 + (W - 8) * la(v) / la(amax);
+    const aT = [0, 1, 10, 100, 1000, 10000, 100000].filter(t => t <= amax);
+    drawCurve(pAct, svgs[1], S.area, sA, aT, t => t >= 1000 ? t / 1000 + "k" : t, (sv, W) => {
+      for (const { e, a: ea, b: eb } of eventsIdx) if (eb >= a && ea < b)
+        sv.append(s("rect", { x: 0, width: W, y: y(Math.max(a, ea)), height: Math.max(3, y(Math.min(b, eb + 1)) - y(Math.max(a, ea))), fill: labColor(e.label), opacity: 0.22 }));
+      sv.append(s("line", { x1: sA(D.min_area, W), x2: sA(D.min_area, W), y1: 20, y2: H + 20, stroke: cssVar("--ink-2"), "stroke-width": 1 }));
+      sv.append(s("text", { x: sA(D.min_area, W) + 3, y: 30, fill: cssVar("--ink-2"), "font-size": 10.5 }, "min-area"));
+      for (const { m, i } of momIdx) if (i >= a && i < b)
+        sv.append(s("path", { d: `M${sA(Math.max(1, m.area), W) + 3},${y(i + 0.5)}l7,-5v10z`, fill: cssVar("--lab-moment") }));
+    });
+    const lv = S.level_pct.map(v => v === null ? 0 : v);
+    const lmax = Math.max(0.05, ...lv.slice(a, b).map(Math.abs)) * 1.1;
+    const sL = (v, W) => 4 + (W - 8) * (v + lmax) / (2 * lmax);
+    drawCurve(pLvl, svgs[2], lv, sL, niceTicks(-lmax, lmax, 3), t => fmtAuto(t), (sv, W) =>
+      sv.append(s("line", { x1: sL(0, W), x2: sL(0, W), y1: 20, y2: H + 20, stroke: cssVar("--axis") })));
+
+    // hit areas
+    hits.forEach((d, k) => Object.assign(d.style, { left: (k ? 0 : ML) + "px", top: "20px",
+      width: ((k ? [pAct, pLvl][k - 1].clientWidth : wHeat)) + "px", height: H + "px" }));
+    pHeat.style.height = pAct.style.height = pLvl.style.height = (H + 20 + MB) + "px";
+  }
+
+  const cross = svgs.map(() => null);
+  function setCross(i) {
+    svgs.forEach((sv, k) => {
+      if (cross[k]) cross[k].remove();
+      const yy = 20 + (i + 0.5 - EX.a) / (EX.b - EX.a) * H;
+      const W = [pHeat, pAct, pLvl][k].clientWidth;
+      cross[k] = s("line", { x1: k ? 0 : ML, x2: W, y1: yy, y2: yy, stroke: cssVar("--ink"), "stroke-width": 1, opacity: 0.55 });
+      sv.append(cross[k]);
+    });
+  }
+  function clearCross() { cross.forEach((c, k) => { if (c) c.remove(); cross[k] = null; }); }
+  let band = null;
+  function onMove(e, k) {
+    const r = hits[k].getBoundingClientRect();
+    const i = Math.min(EX.b - 1, Math.max(EX.a, Math.floor(EX.a + (e.clientY - r.top) / r.height * (EX.b - EX.a))));
+    if (drag) {
+      drag.i1 = i;
+      if (band) band.remove();
+      const y0 = 20 + (Math.min(drag.i0, i) - EX.a) / (EX.b - EX.a) * H, y1 = 20 + (Math.max(drag.i0, i) + 1 - EX.a) / (EX.b - EX.a) * H;
+      band = s("rect", { x: ML, y: y0, width: pHeat.clientWidth - ML, height: y1 - y0, fill: cssVar("--accent"), opacity: 0.15 });
+      svgs[0].append(band);
+    }
+    setCross(i);
+    const t = S.t_us[i], f = S.frame[i];
+    let html = `<b>Frame ${f}${D.step > 1 ? "–" + (f + D.step - 1) : ""}</b>`;
+    if (t !== null && t !== undefined) html += tipRow("from trigger", fmt(t, 1) + " µs");
+    html += tipRow("active area", fmt(S.area[i]) + " px") + tipRow("brightness change", fmt(S.level_pct[i], 3) + " %");
+    if (k === 0) {
+      const c = Math.min(D.xt.cols - 1, Math.floor((e.clientX - r.left) / r.width * D.xt.cols));
+      html += tipRow("x along the tube", fmt((c + 0.5) * D.xt.xbin) + " px") + tipRow("change", fmt(zAt(i, c), 1) + " σ");
+    }
+    const hit = eventsIdx.find(o => i >= o.a && i <= o.b);
+    if (hit) html += `<div style="margin-top:4px">${chip(hit.e.label).outerHTML} event ${hit.e.id} · click to open</div>`;
+    const mo = momIdx.find(o => Math.abs(o.i - i) <= Math.max(1, (EX.b - EX.a) / H * 3));
+    if (mo) html += `<div style="margin-top:4px">moment ${mo.m.rank}: ${mo.m.area} px (below threshold)</div>`;
+    showTip(html, e.clientX, e.clientY);
+  }
+  hits.forEach((d, k) => {
+    d.addEventListener("mousemove", e => onMove(e, k));
+    d.addEventListener("mouseleave", () => { if (!drag) { clearCross(); hideTip(); } });
+    d.addEventListener("mousedown", e => {
+      const r = d.getBoundingClientRect();
+      const i = Math.floor(EX.a + (e.clientY - r.top) / r.height * (EX.b - EX.a));
+      drag = { i0: i, i1: i }; e.preventDefault();
+    });
+    d.addEventListener("dblclick", () => { EX.a = 0; EX.b = n; draw(); });
+  });
+  addEventListener("mouseup", () => {
+    if (!drag) return;
+    const lo = Math.min(drag.i0, drag.i1), hi = Math.max(drag.i0, drag.i1);
+    if (band) { band.remove(); band = null; }
+    drag_end(lo, hi); drag = null;
+  });
+  function drag_end(lo, hi) {
+    if (hi - lo >= 2) { EX.a = Math.max(0, lo); EX.b = Math.min(n, hi + 1); draw(); return; }
+    const hit = eventsIdx.find(o => lo >= o.a - 1 && lo <= o.b + 1);
+    if (hit) { selectEvent(hit.e.id, true); return; }
+    const mo = momIdx.find(o => Math.abs(o.i - lo) <= Math.max(1, (EX.b - EX.a) / H * 3));
+    if (mo) selectMoment(mo.m.rank, true);
+  }
+  EX.zoomTo = (f0, f1) => {
+    const i0 = idxOfFrame(f0), i1 = idxOfFrame(f1);
+    const pad = Math.max(15, Math.round((i1 - i0) * 0.6));
+    EX.a = Math.max(0, i0 - pad); EX.b = Math.min(n, i1 + pad + 1); draw();
+  };
+  const zoom = f => { const c = (EX.a + EX.b) / 2, half = Math.max(5, (EX.b - EX.a) * f / 2);
+    EX.a = Math.max(0, Math.round(c - half)); EX.b = Math.min(n, Math.round(c + half)); draw(); };
+  const tools = h("div", { class: "toolbar" },
+    h("button", { class: "btn", onclick: () => zoom(0.5) }, "Zoom in"),
+    h("button", { class: "btn", onclick: () => zoom(2) }, "Zoom out"),
+    h("button", { class: "btn", onclick: () => { EX.a = 0; EX.b = n; draw(); } }, "Whole recording"),
+    h("span", { class: "muted" }, "Drag vertically to zoom on frames · double-click to reset · click an event mark to open it"));
+  const usedLabels = LABELS.filter(l => D.events.some(e => e.label === l));
+  const leg = h("div", { class: "legend" },
+    h("span", { class: "key" }, h("span", { class: "sw", style: { background: `linear-gradient(90deg, ${cssVar("--div-neg")}, ${cssVar("--div-mid")}, ${cssVar("--div-pos")})`, width: "42px" } }), "darker ← change → brighter (±4 σ)"),
+    h("span", { class: "key" }, h("span", { class: "ln", style: { borderColor: cssVar("--muted") } }), "flagged frame (trigger, flash)"),
+    D.cands.length ? h("span", { class: "key" }, h("span", { class: "ln", style: { borderColor: cssVar("--ink"), borderTopStyle: "dashed" } }), "shock candidate (between the dashes)") : null,
+    D.moments.length ? h("span", { class: "key" }, "○ / ◂ strongest moments below threshold") : null,
+    usedLabels.map(l => h("span", { class: "key" }, h("span", { class: "sw", style: { background: labColor(l) } }), l)));
+  const c = card("Explore the recording",
+    "A shock crossing the field draws a straight slanted line in the x–t diagram; a flash or camera glitch is a horizontal line; dust leaves short specks. " +
+    (D.step > 1 ? `Each row shows ${D.step} frames (the strongest value is kept); zoom in to see single frames.` : ""),
+    tools, leg, wrap);
+  requestAnimationFrame(draw);
+  EX.redraw = draw;
+  return c;
+}
+
+function eventsCard() {
+  const E = D.events;
+  if (!E.length) return card("Events", null, h("p", { class: "empty" },
+    "No event: nothing in the lit field passed the detection thresholds. See the strongest moments below."));
+  const used = LABELS.filter(l => E.some(e => e.label === l));
+  const detail = h("div");
+  const clickNote = D.has_detection ? "Click an event to see its images and curve, and to zoom the diagrams on it." : "Click an event to see its images.";
+  const filt = h("div", { class: "toolbar" });
+  let tableWrap;
+  const cols = [
+    { key: "id", title: "#", num: true, value: e => e.id },
+    { key: "label", title: "Label", value: e => LABELS.indexOf(e.label), render: e => chip(e.label) },
+    { key: "start", title: "Frames", value: e => e.fields.start_frame, render: e => `${e.fields.start_frame}–${e.fields.end_frame}` },
+    { key: "dur", title: "Duration", num: true, value: e => e.fields.duration_frames, render: e => fmt(e.fields.duration_frames) + " fr" },
+    { key: "t", title: "Peak from trigger", num: true, value: e => e.t_peak_us, render: e => e.t_peak_us === null || e.t_peak_us === undefined ? "–" : fmt(e.t_peak_us, 1) + " µs" },
+    { key: "area", title: "Peak area", num: true, value: e => e.fields.peak_area_px, render: e => fmt(e.fields.peak_area_px) + " px" },
+    { key: "snr", title: "Peak SNR", num: true, value: e => e.fields.peak_snr, render: e => fmt(e.fields.peak_snr, 1) },
+    { key: "pol", title: "Polarity", value: e => e.fields.polarity, render: e => e.fields.polarity || "–" },
+    { key: "why", title: "Why this label", sort: false, render: e => h("span", { class: "muted" }, e.reason) },
+  ];
+  function drawTable() {
+    const rows = EX.filter ? E.filter(e => e.label === EX.filter) : E;
+    const t = sortableTable(cols, rows, { onRow: e => selectEvent(e.id, false), isSelected: e => EX.sel === "e" + e.id });
+    if (tableWrap) tableWrap.replaceWith(t); tableWrap = t;
+  }
+  function drawFilters() {
+    filt.innerHTML = "";
+    filt.append(h("button", { class: "chip", "aria-pressed": String(!EX.filter), onclick: () => { EX.filter = null; drawFilters(); drawTable(); } }, "All · " + E.length));
+    for (const l of used) filt.append(h("button", { class: "chip", "aria-pressed": String(EX.filter === l), title: LABEL_HELP[l],
+      onclick: () => { EX.filter = l; drawFilters(); drawTable(); } },
+      h("span", { class: "dot", style: { background: labColor(l) } }), `${l} · ${E.filter(e => e.label === l).length}`));
+  }
+  drawFilters(); drawTable();
+  EX.drawTable = drawTable; EX.detail = detail;
+  const c = card("Events", clickNote, used.length ? filt : null, tableWrap, detail);
+  if (EX.sel && EX.sel[0] === "e") requestAnimationFrame(() => selectEvent(+EX.sel.slice(1), false, true));
+  return c;
+}
+
+function selectEvent(id, fromChart, silent) {
+  const e = D.events.find(x => x.id === id);
+  if (!e) return;
+  EX.sel = "e" + id;
+  if (EX.drawTable) EX.drawTable();
+  if (EX.zoomTo && !fromChart) EX.zoomTo(e.fields.start_frame, e.fields.end_frame);
+  const F = e.fields, fps = (D.meta || {}).fps;
+  const dur = F.duration_frames;
+  const tiles = h("div", { class: "tiles" },
+    tile("Frames", `${F.start_frame}–${F.end_frame}`, `peak at ${F.peak_frame}` + (e.t_peak_us !== null && e.t_peak_us !== undefined ? `, ${fmt(e.t_peak_us, 1)} µs from trigger` : "")),
+    tile("Duration", fmt(dur) + " frames", fps ? fmt(dur / fps * 1e6, 1) + " µs" : null),
+    tile("Peak area", fmt(F.peak_area_px) + " px", `peak SNR ${fmt(F.peak_snr, 1)} · ${F.polarity || "–"}`),
+    tile("Centroid speed", fmt(F.centroid_speed_px_per_frame, 2) + " px/frame",
+      F.centroid_speed_m_per_s !== undefined && F.centroid_speed_m_per_s !== null ? fmt(F.centroid_speed_m_per_s, 1) + " m/s" : "descriptive fit, not a front speed"));
+  const I = e.images;
+  const figs = h("div", { class: "figs" },
+    I.peak ? h("figure", null, h("img", { src: I.peak, alt: "Peak frame" }), h("figcaption", null, "Frame at the peak, active region outlined")) : null,
+    I.montage ? h("figure", null, h("img", { src: I.montage, alt: "Montage" }), h("figcaption", null, "Change across the event (red brighter, blue darker)")) : null,
+    I.trajectory ? h("figure", null, h("img", { src: I.trajectory, alt: "Trajectory" }), h("figcaption", null, "Centroid path and active area")) : null);
+  const fields = h("details", null, h("summary", null, "All measurements"),
+    h("dl", { class: "kv" }, Object.entries(F).flatMap(([k, v]) => [h("dt", null, k), h("dd", null, fmtAuto(v))])));
+  EX.detail.innerHTML = "";
+  EX.detail.append(h("div", { class: "detail" },
+    h("h3", null, chip(e.label), ` Event ${e.id}`),
+    h("p", { class: "sub" }, `${e.reason}. ${LABEL_HELP[e.label] ? "Label meaning: " + LABEL_HELP[e.label] + "." : ""}`),
+    tiles, eventCurve(e), figs, fields));
+  if (!silent) EX.detail.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function eventCurve(e) {
+  const C = e.curve;
+  if (!C.frame.length) return null;
+  const W = Math.min(900, ($("#app").clientWidth || 900) - 40), H = 150, ML = 50, MB = 24, MT = 8;
+  const f0 = C.frame[0], f1 = C.frame[C.frame.length - 1];
+  const amax = Math.max(1, ...C.area);
+  const x = f => ML + (W - ML - 10) * (f - f0) / Math.max(1, f1 - f0);
+  const y = v => MT + (H - MT - MB) * (1 - v / amax);
+  const svg = s("svg", { width: W, height: H, style: "position:static" });
+  C.frame.forEach((f, k) => { if (C.core[k]) svg.append(s("rect", { x: x(f) - (W - ML) / C.frame.length / 2, width: (W - ML) / C.frame.length, y: MT, height: H - MT - MB, fill: labColor(e.label), opacity: 0.12 })); });
+  for (const t of niceTicks(0, amax, 3)) svg.append(s("line", { x1: ML, x2: W - 10, y1: y(t), y2: y(t), stroke: cssVar("--grid") }),
+    s("text", { x: ML - 6, y: y(t) + 4, "text-anchor": "end", fill: cssVar("--muted"), "font-size": 11 }, fmtAuto(t)));
+  for (const t of niceTicks(f0, f1, 6)) svg.append(s("text", { x: x(t), y: H - 6, "text-anchor": "middle", fill: cssVar("--muted"), "font-size": 11 }, t));
+  const d = C.frame.map((f, k) => (k ? "L" : "M") + x(f).toFixed(1) + "," + y(C.area[k]).toFixed(1)).join("");
+  svg.append(s("path", { d, fill: "none", stroke: cssVar("--series"), "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  const dot = s("circle", { r: 4, fill: cssVar("--series"), stroke: cssVar("--surface"), "stroke-width": 2, visibility: "hidden" });
+  svg.append(dot, s("rect", { x: ML, y: 0, width: W - ML, height: H - MB, fill: "transparent",
+    onmousemove: ev => { const r = svg.getBoundingClientRect(); const f = f0 + (ev.clientX - r.left - ML) / (W - ML - 10) * (f1 - f0);
+      let k = 0; C.frame.forEach((ff, j) => { if (Math.abs(ff - f) < Math.abs(C.frame[k] - f)) k = j; });
+      dot.setAttribute("cx", x(C.frame[k])); dot.setAttribute("cy", y(C.area[k])); dot.setAttribute("visibility", "visible");
+      showTip(`<b>Frame ${C.frame[k]}</b>${tipRow("active area", fmt(C.area[k]) + " px")}${tipRow("", C.core[k] ? "event" : "context")}`, ev.clientX, ev.clientY); },
+    onmouseleave: () => { dot.setAttribute("visibility", "hidden"); hideTip(); } }));
+  return h("div", null, h("div", { class: "muted", style: { fontSize: "12.5px" } }, "Active area per frame (shaded: the event, the rest is context)"), svg);
+}
+
+function momentsCard() {
+  const Mo = D.moments;
+  if (!Mo.length) return card("Strongest moments below the thresholds", null, h("p", { class: "empty" }, "None listed (the whole recording is inside events, or --moments 0)."));
+  const g = h("div", { class: "gallery" }, Mo.map(m => h("div", { class: "gcard" + (EX.sel === "m" + m.rank ? " selected" : ""), id: "mom" + m.rank, onclick: () => selectMoment(m.rank, false) },
+    m.image ? h("img", { src: m.image, alt: `Moment ${m.rank}` }) : null,
+    h("div", { class: "cap" }, h("b", null, `Moment ${m.rank}`), ` · frame ${m.frame} · ${fmt(m.area)} px · SNR ${fmt(m.snr, 1)}` +
+      (m.t_us !== null && m.t_us !== undefined ? ` · ${fmt(m.t_us, 1)} µs from trigger` : "")))));
+  return card("Strongest moments below the thresholds",
+    "The frames that came closest to being detected, outside every event (change outlined in green, circled in red). Pure noise also produces such moments: they are for looking, not proof.", g);
+}
+function selectMoment(rank, fromChart) {
+  const m = D.moments.find(x => x.rank === rank);
+  if (!m) return;
+  EX.sel = "m" + rank;
+  document.querySelectorAll(".gcard").forEach(c => c.classList.toggle("selected", c.id === "mom" + rank));
+  if (EX.zoomTo && !fromChart) EX.zoomTo(m.frame - 10, m.frame + 10);
+  const el = document.getElementById("mom" + rank);
+  if (el && fromChart) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function candidatesCard() {
+  const V = D.verdict, C = D.cands;
+  const sens = (V.sens || []).map(([k, a, p]) => h("tr", null, h("td", null, `${k} frames`), h("td", { class: "num" }, fmt(p, 2) + " %"), h("td", { class: "num" }, fmt(a, 2) + " σ")));
+  const sensTable = h("table", { style: { maxWidth: "460px" } }, h("thead", null, h("tr", null, h("th", null, "Front seen over"), h("th", { class: "num" }, "% of brightness"), h("th", { class: "num" }, "pixel-noise σ"))), h("tbody", null, sens));
+  const body = C.length ? sortableTable([
+    { key: "candidate_id", title: "#", num: true },
+    { key: "score", title: "Score (σ)", num: true, render: c => fmt(c.score, 1) },
+    { key: "start_frame", title: "Frames", render: c => `${c.start_frame}–${c.end_frame}` },
+    { key: "v_px_per_frame", title: "Speed", num: true, render: c => fmt(c.v_px_per_frame, 1) + " px/frame" + (c.v_m_per_s ? ` (${fmt(c.v_m_per_s, 0)} m/s)` : "") },
+    { key: "x0_px", title: "x (px)", num: true, render: c => `${fmt(c.x0_px)} → ${fmt(c.x_end_px)}` },
+    { key: "polarity", title: "Polarity" },
+  ], C, { onRow: c => EX.zoomTo && EX.zoomTo(c.start_frame - 20, c.end_frame + 20) })
+    : h("p", null, `No moving front found: the best straight track scored ${fmt(V.best_score, 1)}, below the report threshold of ${fmt(V.shock_k, 0)} (pure noise reaches about 5–6).`);
+  return card("Shock search", "Tracks summed along straight lines of the x–t diagram. The table below says how faint a front the search would still have reported.",
+    body, h("h3", { style: { marginTop: "14px" } }, "Sensitivity"), sensTable);
+}
+
+function infoCard() {
+  const M = D.meta || {}, P = D.params || {}, St = D.stats || {};
+  const kv = obj => h("dl", { class: "kv" }, Object.entries(obj).filter(([, v]) => v !== null && v !== undefined && v !== "")
+    .flatMap(([k, v]) => [h("dt", null, k), h("dd", null, Array.isArray(v) ? v.join(", ") : fmtAuto(v))]));
+  const cam = {
+    "Camera": M.device, "Serial": M.serial !== null && M.serial !== undefined ? String(M.serial) : null, "Metadata file": M.source, "Frame rate (fps)": M.fps,
+    "Exposure set (µs)": M.exposure_us, "Exposure measured (µs)": M.exposure_measured_us,
+    "Resolution": M.width ? `${M.width} × ${M.height}` : null, "Bit depth": M.bit_depth,
+    "Files": M.n_files, "Images in header": M.header_images, "Trigger (file index)": M.trigger_index,
+    "Trigger time (UTC)": M.date, "Pixel size (µm)": M.pixel_size_um,
+  };
+  const quality = {
+    "Brightness (median counts)": St.brightness, "Pixel noise (counts)": St.noise,
+    "Pixel noise (% of brightness)": St.noise_pct, "Measured part of the frame (%)": St.measured_frac !== undefined ? 100 * St.measured_frac : null,
+    "Pooled-SNR inflation": St.inflation, "Pixel threshold (σ)": St.pix_threshold,
+  };
+  return card("Camera, image quality and settings", null, h("div", { class: "grid2" },
+    h("div", null, h("h3", null, "Camera"), kv(cam), (M.notes || []).length ? h("p", { class: "muted", style: { fontSize: "12.5px" } }, M.notes.join(" ")) : null),
+    h("div", null, h("h3", null, "Image quality"), kv(quality)),
+    h("div", null, h("h3", null, "Analysis settings"), kv(P))));
+}
+
+// ============================================================ CAMPAIGN PAGE
+function campaignPage(app) {
+  const R = D.shots;
+  const analysed = R.filter(r => r.has_detection);
+  app.append(h("div", null, h("h1", null, D.name),
+    h("p", { class: "sub" }, `Campaign dashboard · ${R.length} shot${R.length > 1 ? "s" : ""} · generated ${D.generated}`)));
+  const labels = {};
+  R.forEach(r => Object.entries(r.verdict.labels).forEach(([l, n]) => labels[l] = (labels[l] || 0) + n));
+  const nC = R.reduce((a, r) => a + (r.verdict.n_cands || 0), 0);
+  const sens = analysed.map(r => r.verdict.sens8).filter(v => typeof v === "number");
+  app.append(h("div", { class: "tiles" },
+    tile("Shots", R.length, `${analysed.length} with full detection data`),
+    R.some(r => r.verdict.search)
+      ? tile("Shock candidates", nC, nC ? "see the shots marked below" : "no moving front found in any shot")
+      : tile("Shock candidates", "–", "shock search not run (older results)"),
+    h("div", { class: "tile" }, h("div", { class: "label" }, "Events"), h("div", { class: "value" }, R.reduce((a, r) => a + r.verdict.n_events, 0)),
+      h("div", { class: "note" }, LABELS.filter(l => labels[l]).map(l => chip(l, labels[l])))),
+    sens.length ? tile("Sensitivity", (Math.min(...sens).toFixed(2) === Math.max(...sens).toFixed(2) ? fmt(sens[0], 2) : `${fmt(Math.min(...sens), 2)}–${fmt(Math.max(...sens), 2)}`) + " %",
+      "faintest front reported over 8 frames" + (sens.length > 1 ? ", best to worst shot" : "")) : null));
+
+  const icon = { warning: ["!", "--warning"], info: ["i", "--info"], good: ["✓", "--good"], critical: ["×", "--critical"] };
+  app.append(card("Data checks", "Found automatically from the files: duplicate recordings, incomplete exports, missing metadata, shots not analysed.",
+    h("ul", { class: "checks" }, D.checks.map(c => h("li", null,
+      h("span", { class: "icon", style: { background: cssVar(icon[c.level][1]) }, "aria-hidden": "true" }, icon[c.level][0]),
+      h("div", null, h("b", null, c.title), " ", h("span", { class: "muted" }, `(${c.level})`), h("div", { class: "sub", style: { margin: 0 } }, c.detail)))))));
+
+  app.append(card("Shots", "Click a name to open its dashboard (keep the analysis folders next to this file). Click a column title to sort.",
+    sortableTable([
+      { key: "thumb", title: "x–t diagram", sort: false, render: r => r.thumb ? h("img", { class: "thumb", src: r.thumb, alt: "" }) : h("span", { class: "muted" }, "–") },
+      { key: "name", title: "Shot", render: r => h("a", { href: r.href }, r.name) },
+      { key: "n_frames", title: "Frames", num: true },
+      { key: "fps", title: "fps", num: true, value: r => r.meta.fps, render: r => fmt(r.meta.fps) },
+      { key: "exp", title: "Exposure", num: true, value: r => r.meta.exposure_measured_us || r.meta.exposure_us, render: r => (r.meta.exposure_measured_us || r.meta.exposure_us) ? fmtAuto(r.meta.exposure_measured_us || r.meta.exposure_us) + " µs" : "–" },
+      { key: "trigger_frame", title: "Trigger", num: true },
+      { key: "ev", title: "Events", value: r => r.verdict.n_events, render: r => r.verdict.n_events ? LABELS.filter(l => r.verdict.labels[l]).map(l => chip(l, r.verdict.labels[l])) : h("span", { class: "muted" }, "none") },
+      { key: "cands", title: "Shock cand.", num: true, value: r => r.verdict.n_cands, render: r => r.verdict.search ? `${r.verdict.n_cands} (best ${fmt(r.verdict.best_score, 1)})` : "–" },
+      { key: "sens", title: "Sensitivity", num: true, value: r => r.verdict.sens8, render: r => r.verdict.sens8 ? fmt(r.verdict.sens8, 2) + " %" : "–" },
+      { key: "noise", title: "Pixel noise", num: true, value: r => r.stats.noise_pct, render: r => r.stats.noise_pct ? fmt(r.stats.noise_pct, 2) + " %" : "–" },
+      { key: "bright", title: "Brightness", num: true, value: r => r.stats.brightness, render: r => fmt(r.stats.brightness) },
+      { key: "mom", title: "Largest moment", num: true, value: r => r.verdict.largest_moment ? r.verdict.largest_moment.area : null, render: r => r.verdict.largest_moment ? `${r.verdict.largest_moment.area} px @ ${r.verdict.largest_moment.frame}` : "–" },
+    ], R)));
+
+  const chartsCard = card("Across shots",
+    "The same measures for every shot, to compare image quality and results. Lower sensitivity values and lower noise are better.");
+  const grid = h("div", { class: "grid2" });
+  chartsCard.append(grid);
+  app.append(chartsCard);
+  requestAnimationFrame(() => {
+    // Lay out every box first, then size each chart to its column.
+    const pending = [];
+    const add = (title, sub, make) => {
+      const box = h("div", { style: { minWidth: 0 } }, h("h3", null, title), sub ? h("p", { class: "sub", style: { fontSize: "12.5px" } }, sub) : null);
+      grid.append(box);
+      pending.push([box, make]);
+    };
+    const named = R.filter(r => r.has_detection);
+    if (named.length) {
+    add("Faintest front the shock search would report", "Full-height front seen over 8 frames, % of the image brightness. Lower is better.",
+      w => hbar(named.map(r => ({ name: r.name, value: r.verdict.sens8 })), { width: w, unit: " %", digits: 2, label: "sensitivity" }));
+    add("Pixel noise", "Temporal noise of one pixel, % of the brightness. It sets the sensitivity above.",
+      w => hbar(named.map(r => ({ name: r.name, value: r.stats.noise_pct })), { width: w, unit: " %", digits: 2, label: "pixel noise" }));
+    add("Brightness", "Median background level of the measured field (camera counts).",
+      w => hbar(named.map(r => ({ name: r.name, value: r.stats.brightness })), { width: w, digits: 0, label: "brightness" }));
+    add("Best shock-search score", "Strongest straight track in the x–t diagram; the line is the report threshold. Noise alone reaches about 5–6.",
+      w => hbar(named.map(r => ({ name: r.name, value: r.verdict.best_score })), { width: w, digits: 1, ref: named.length ? named[0].verdict.shock_k : null, refLabel: "threshold", label: "best score" }));
+    }
+    const used = LABELS.filter(l => R.some(r => r.verdict.labels[l]));
+    add("Events by label", null, w => h("div", null, used.length ? legend(used) : null,
+      stackedBar(R.map(r => ({ name: r.name, parts: r.verdict.labels })), { width: w })));
+    for (const [box, make] of pending) box.append(make(Math.max(260, box.clientWidth)));
+    app.append(multiplesCard());
+  });
+}
+
+function multiplesCard() {
+  // Only shots whose trigger frame lies inside the recording share an axis.
+  const R = D.shots.filter(r => r.aligned && r.trigger_frame !== null && r.trigger_frame !== undefined);
+  const out = D.shots.filter(r => !R.includes(r)).map(r => r.name);
+  const note = out.length ? h("p", { class: "muted", style: { fontSize: "12.5px" } },
+    `Not shown (no trigger frame inside the recording): ${out.join(", ")}.`) : null;
+  if (!R.length) return card("Around the trigger", null, h("p", { class: "empty" }, "No shot has its trigger frame inside the recording."));
+  let t0 = Infinity, t1 = -Infinity;
+  R.forEach(r => r.aligned.t_us.forEach(t => { if (t !== null) { t0 = Math.min(t0, t); t1 = Math.max(t1, t); } }));
+  const box = h("div");
+  const c = card("Around the trigger",
+    "Each shot against the time from its trigger (µs), on a common time axis: when does something happen, and is it the same in every shot? The trigger frame itself is a camera artefact.", box);
+  requestAnimationFrame(() => {
+    const W = Math.max(300, box.clientWidth - 120), Hh = 64;
+    const x = t => 8 + (W - 16) * (t - t0) / (t1 - t0 || 1);
+    const block = (title, key, scaleOf, fmtV) => {
+      const g = h("div", { style: { marginBottom: "14px" } }, h("h3", null, title));
+      R.forEach((r, ri) => {
+        const A = r.aligned, vals = A[key];
+        const sc = scaleOf(vals);
+        const svg = s("svg", { width: W, height: Hh + (ri === R.length - 1 ? 20 : 4), style: "position:static" });
+        svg.append(s("line", { x1: x(0), x2: x(0), y1: 2, y2: Hh, stroke: cssVar("--axis") }));
+        svg.append(s("line", { x1: 8, x2: W - 8, y1: sc.y(sc.base), y2: sc.y(sc.base), stroke: cssVar("--grid") }));
+        let d = "";
+        A.t_us.forEach((t, k) => { if (t !== null && vals[k] !== null) d += (d ? "L" : "M") + x(t).toFixed(1) + "," + sc.y(vals[k]).toFixed(1); });
+        svg.append(s("path", { d, fill: "none", stroke: cssVar("--series"), "stroke-width": 1.5, "stroke-linejoin": "round" }));
+        if (ri === R.length - 1) for (const t of niceTicks(t0, t1, 7))
+          svg.append(s("text", { x: x(t), y: Hh + 16, "text-anchor": "middle", fill: cssVar("--muted"), "font-size": 11 }, fmtAuto(t)));
+        const vline = s("line", { y1: 2, y2: Hh, stroke: cssVar("--ink"), opacity: 0.5, visibility: "hidden" });
+        svg.append(vline, s("rect", { x: 0, y: 0, width: W, height: Hh, fill: "transparent",
+          onmousemove: ev => { const rr = svg.getBoundingClientRect(); const t = t0 + (ev.clientX - rr.left - 8) / (W - 16) * (t1 - t0);
+            let k = 0, best = Infinity; A.t_us.forEach((tt, j) => { if (tt !== null && Math.abs(tt - t) < best) { best = Math.abs(tt - t); k = j; } });
+            vline.setAttribute("x1", x(A.t_us[k])); vline.setAttribute("x2", x(A.t_us[k])); vline.setAttribute("visibility", "visible");
+            showTip(`<b>${r.name}</b>${tipRow("from trigger", fmt(A.t_us[k], 1) + " µs")}${tipRow(title.toLowerCase(), fmtV(vals[k]))}`, ev.clientX, ev.clientY); },
+          onmouseleave: () => { vline.setAttribute("visibility", "hidden"); hideTip(); } }));
+        g.append(h("div", { class: "multi" }, h("div", { class: "mname", title: r.name }, r.name), svg));
+      });
+      g.append(h("div", { class: "multi" }, h("div"), h("div", { class: "muted", style: { fontSize: "12px", textAlign: "center" } }, "time from trigger (µs)")));
+      return g;
+    };
+    box.append(block("Active area", "area", vals => { const m = Math.max(10, ...vals); const la = v => Math.log10(1 + Math.max(0, v));
+      return { base: 0, y: v => Hh - 4 - (Hh - 8) * la(v) / la(m) }; }, v => fmt(v) + " px"));
+    box.append(block("Brightness change", "level_pct", vals => { const m = Math.max(0.05, ...vals.map(v => Math.abs(v || 0)));
+      return { base: 0, y: v => Hh / 2 - (Hh / 2 - 4) * v / m }; }, v => fmt(v, 3) + " %"));
+    box.append(h("p", { class: "muted", style: { fontSize: "12.5px" } }, "Active area on a log scale per shot; brightness scaled per shot (each row its own range). Hover for values."), note);
+  });
+  return c;
+}
+
+// ------------------------------------------------------------------ render
+function render() {
+  const app = $("#app");
+  app.innerHTML = "";
+  hideTip();
+  OFF = null;
+  if (D.page === "campaign") campaignPage(app); else shotPage(app);
+}
+render();
+let rt = null;
+addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(render, 200); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+</script>
+</body>
+</html>

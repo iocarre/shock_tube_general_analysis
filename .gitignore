@@ -4,11 +4,9 @@ __pycache__/
 .venv/
 venv/
 
-# Data folders (raw recordings and everything the scripts write next to them)
+# Data folders (raw recordings and their analysis folders)
 shockTube_*/
 Test*/
 
-# Analysis outputs, wherever they are written
+# Analysis folders, wherever they are written
 *_analysis/
-*_events.csv
-*_timeline.png
