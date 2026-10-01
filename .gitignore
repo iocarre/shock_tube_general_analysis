@@ -7,6 +7,7 @@ venv/
 # Data folders (raw recordings and their analysis folders)
 shockTube_*/
 Test*/
+Donnerstag/
 
 # Analysis folders, wherever they are written
 *_analysis/

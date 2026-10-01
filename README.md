@@ -54,6 +54,7 @@ labels the events and draws the overview sheet.
 - [Script 2 — `analyze_activity.py`](#script-2--analyze_activitypy)
 - [Both at once — `full_detect_analysis.py`](#both-at-once--full_detect_analysispy)
 - [Batch processing](#batch-processing)
+- [Micro-tube detection — `tube.py`](#micro-tube-detection--tubepy)
 - [Shared modules](#shared-modules)
 - [Tuning guide](#tuning-guide)
 - [Troubleshooting](#troubleshooting)
@@ -86,6 +87,9 @@ RUN_analysis/
 ├── RUN_timeline.png              x–t diagram + activity, whole recording
 ├── RUN_activity.npz              per-frame arrays and the x–t diagram
 ├── RUN_moments.csv               strongest moments below the event thresholds
+├── RUN_tube.png / RUN_tube.json  the micro-tube found (or why none)
+├── RUN_tube_shocks.csv           fronts found inside the tube's bore
+├── tube_fronts/                  one sheet per front in the tube
 ├── moments/                      one picture per strongest moment
 └── event_0/                      one folder per event
     ├── RUN_event_0_peak.png      the frame at the peak, change outlined
@@ -324,7 +328,7 @@ moved or e-mailed on their own.
 
 They are written at the end of every analysis (`--no-dashboard` to skip): the
 shot page after each shot, the campaign page after a batch run (or after a
-single shot whose campaign already has one). To rebuild them from existing
+single shot: every campaign page in the folders above it is refreshed). To rebuild them from existing
 results without re-running anything:
 
 ```bash
@@ -537,7 +541,8 @@ python3 detect_activity.py RUN --pix-k 5 --smooth 7 --min-area 12
 | `--shock-k` | `7.0` | Report tracks scoring at least this (σ). Pure noise stays below ~6.3 on the test recordings. |
 | `--shock-vmin` | `4` | Slowest front searched (px/frame). Slower tracks pick up stationary changes. |
 | `--shock-vmax` | width/4 | Fastest front searched (px/frame); the default means seen in ≥ 4 frames. |
-| `--xt-bin` | `4` | Columns merged in the x–t diagram (px). |
+| `--xt-bin` | `4` | Columns merged in the x–t diagram (px), and px per bin along the tube's bore diagram. |
+| `--tube` | `auto` | `auto`: look for a micro-tube and, if there is one, also search for fronts inside its bore (see [Micro-tube detection](#micro-tube-detection--tubepy)); `off`: skip. |
 | **Strongest moments** | | |
 | `--moments` | `8` | How many strongest moments below the event thresholds to list in `NAME_moments.csv` and on the overview; `0` disables. |
 | **Metadata / diagnostics** | | |
@@ -677,6 +682,7 @@ context frames, then:
 | `--movie` / `--no-movie` | on | Render an MP4 per event from the same treated frames (skipped with a warning if `ffmpeg` is missing). |
 | `--movie-fps` | `12` | Playback frame rate of the MP4. (Capture is much faster, so this slows the action down.) |
 | `--overview` / `--no-overview` | on | Write `NAME_overview.png` for the recording. |
+| `--front-sheets` / `--no-front-sheets` | on | Write `tube_fronts/NAME_tube_front_<id>.png` for each front found in a micro-tube (see [Fronts inside the tube](#fronts-inside-the-tube)). |
 | `--dashboard` / `--no-dashboard` | on | Write `NAME_dashboard.html`, and the campaign dashboard after a batch (see [Dashboards](#dashboards)). |
 
 ### Outputs (in `--out-dir`)
@@ -774,10 +780,29 @@ and chains them.
 
 ## Batch processing
 
-If `INPUT_DIR` holds no frames itself, all three scripts treat each of its
-immediate subfolders that does hold frames as a separate shot (`*_analysis`
-output folders are ignored), and process them one after the other. Each shot
-gets its own `NAME_analysis/` folder, so `--out-dir` and an explicit
+If `INPUT_DIR` holds no frames itself, all three scripts search every folder
+below it, **at any depth**, and treat each one that holds frames as a separate
+shot, processed one after the other. The search does not go inside a shot
+folder, nor into `*_analysis` output folders or hidden folders (`.name`).
+Campaigns can therefore be organised freely, e.g. by day and by test:
+
+```
+campaign/
+├── campaign_dashboard.html       ← every shot below, named by its path
+├── day1/
+│   ├── test3/
+│   │   ├── T1/                   frames → shot "day1/test3/T1"
+│   │   ├── T1_analysis/
+│   │   ├── T2/
+│   │   └── T2_analysis/
+│   └── reference/                frames → shot "day1/reference"
+└── day2/
+    └── test3/
+        └── T1/                   same name as above: no clash, each has
+                                  its own T1_analysis/ next to it
+```
+
+Each shot gets its own `NAME_analysis/` folder, so `--out-dir` and an explicit
 `EVENTS_CSV` are refused in batch mode.
 
 Shots already processed are skipped, so a campaign can be re-run after adding
@@ -800,6 +825,132 @@ included).
 
 ---
 
+## Micro-tube detection — `tube.py`
+
+Most shots have a straight micro-tube in the field; some are taken in open air
+(to test the shadowgraph). The tube's position, angle, length and diameter vary
+from shot to shot. `tube.py` finds it automatically from the shot's background
+image. In a shadowgraph the tube always looks the same: two thin, straight,
+parallel dark lines (its walls) with a bright strip between them (its bore).
+
+```bash
+python3 tube.py Donnerstag --rotate 90                 # every shot, any depth
+python3 tube.py Donnerstag/t400/Test1/26284_1_50 --rotate 90
+```
+
+Use the same `--rotate` as for the analysis: the geometry is given in the
+frame as the analysis sees it. Each shot gets, in its `NAME_analysis/`:
+
+- **`NAME_tube.json`** — the tube's geometry, or why no tube was found. It
+  holds the axis angle, the bore edges, the walls, the visible stretches along
+  the tube, and the bore width in px (`bore_px`, and `bore_px_ends` at both
+  ends of the tube).
+- **`NAME_tube.png`** — the background with the bore edges (orange) and the
+  ends of each visible stretch (blue) drawn on it.
+
+A folder of shots also gets **`CAMPAIGN_tubes.png`**, one thumbnail per shot,
+to check every detection at a glance.
+
+How it decides:
+
+1. **Thin dark lines** — pixels more than 15 % darker than their lit 9×9
+   neighbourhood. A broad dark object (rod, holder, unlit area) is not a thin
+   line.
+2. **Straight lines at every angle** (Hough), then **pairs of parallel lines**
+   3–40 px apart.
+3. **The bore must be seen** — lit, and brighter than both walls, over at least
+   60 px in total. A noise-only image never forms such long continuous
+   stretches. A tube hidden in places (e.g. under a holder) is kept as several
+   stretches along the same line.
+4. **Refinement** — the angle (to 0.05°) maximises the contrast of the profile
+   across the tube. Each bore edge is measured in 24-px pieces along the tube
+   and fitted with a straight line of its own, so a tapered bore is followed.
+   Pieces more than 0.5 px off the line are dropped, so a local defect cannot
+   tilt it.
+
+Shots whose image contrast is below 20× the pixel noise (unlit, light off) are
+reported as unusable rather than searched. On the Marseille and Donnerstag
+campaigns, every shot is classified correctly (51 of 52 have a lit image).
+
+### Fronts inside the tube
+
+Detection (`detect_activity.py` / `full_detect_analysis.py`) does this
+automatically (`--tube off` to skip). It looks for the tube in the background
+model it builds anyway, writes `NAME_tube.json` / `NAME_tube.png`, and, when
+there is a tube, builds a **second x–t diagram from the bore's pixels only**:
+
+- each bore pixel's change in units of its own noise, `(frame − bg) / σ`,
+  minus the frame's median over the bore (a flash brightens the whole bore at
+  once). There is no spatial smoothing: the bore is only a few px wide, and a
+  pooling box would mix in the walls and the flow outside;
+- averaged in `--xt-bin` px bins **along the tube** (the position `s` runs
+  from the start of its visible part), following its angle and its bore edges;
+  bins where the tube is hidden stay empty.
+
+The same straight-track search as for the whole field runs on it (same
+`--shock-k`, `--shock-vmin`, `--shock-vmax`). A front confined to the bore
+keeps its full strength there, whereas the height-averaged diagram dilutes it
+by the bore's share of the frame height (about 5 of 128 rows here). On
+Donnerstag, that makes the bore diagram about 6× more sensitive to fronts inside
+the tube. Noise alone scored at most 5.6 in the bore diagrams of 35 shots
+(pre-trigger frames), against the report threshold of 7.
+
+**Inside or outside?** A wave travelling *outside* the tube (e.g. the blast
+wave around the source) crosses the bore's rows in the picture too: a
+shadowgraph integrates along the line of sight, and the wave wraps around the
+tube. To tell them apart, a third diagram samples a **band just outside the
+walls** (2–8 px beyond each outer edge, lit pixels only). For each front found
+in the bore, that band is summed along the same track:
+
+| `where` | Meaning |
+|---|---|
+| `inside` | nothing significant outside the walls (score < 2.5): a front inside the tube |
+| `outside too` | significant outside (≥ 3.5) with at least half the bore's amplitude: a wave outside the tube, seen through it |
+| `unclear` | in between, or too little lit band along the track |
+| `tube moving` | the tube itself moved by ≥ 0.1 px across its axis during the track (flagged frames ignored: a flash fakes a one-frame shift): its walls sweep the bore's pixels, so the "front" may be nothing but the walls moving (overrides the others) |
+
+The tube's movement is measured in every frame: a rigid shift `d` across the
+axis changes the image around the tube by about `−d × ∂bg/∂ρ`, and `d` is the
+least-squares fit of that to the change in a band covering the tube and its
+walls. In quiet frames it scatters by about 0.002 px. In Marseille t10 the
+tube swings by up to 1 px after the shot; in 1_32 it jumps 0.4 px at the
+trigger and settles within ~12 frames.
+
+Results:
+
+- **`NAME_tube_shocks.csv`** — one row per front in the bore: score, `where`,
+  `outside_score` and `tube_shift_px` (largest tube movement during it), frames, start/end along the tube (`s0_px`, `s_end_px`)
+  and in the frame (`x0_px`, `y0_px`, `x_end_px`, `y_end_px`), speed along the
+  tube (negative = towards the tube's start, i.e. towards smaller x for a
+  near-horizontal tube), polarity.
+- **`tube_fronts/NAME_tube_front_<id>.png`** — one sheet per front, written
+  by the analysis, to judge it by eye:
+  - the frames along its track (up to 4), background-subtracted (3×3 mean,
+    in pixel-noise units, unlit pixels grey), with every front present at
+    that moment marked: ○ inside, □ outside too, ◇ unclear;
+  - the x–t diagrams **inside the bore** and **just outside the walls**,
+    side by side, around its frames: a front inside the tube shows only in
+    the first, a wave outside the tube in both;
+  - the position along the tube against time of every front in those
+    frames: measured in each frame (hollow marker: flagged frame) and the
+    fitted straight track. With an inside and an outside front together,
+    the title gives their speed ratio;
+  - the profile across the tube at the front (at most 8 frames of its track),
+    walls shaded: a front inside the tube changes the bore only.
+- **Events** overlapping a front in the bore get the `shock-candidate` label
+  ("overlaps front(s) … found in the tube"). `NAME_events.csv` has a
+  `tube_candidates` column.
+- **The timeline and the overview** show the bore's x–t diagram next to the
+  whole field's. The overview verdict states the tube, the fronts in it
+  (`inside` first), or the faintest front the search would have reported.
+- **The shot dashboard** shows the bore's diagram in the explorer, sharing the
+  frame axis and the zoom with the whole field's, plus a "Micro-tube" card with
+  the detection picture, the fronts, their sheets and the sensitivity. **The campaign
+  dashboard** has "Tube bore" and "Fronts in tube" columns, and a tile counting
+  the shots with a front inside their tube.
+
+---
+
 ## Shared modules
 
 ### `change_common.py`
@@ -809,7 +960,7 @@ Imported by both scripts; not run directly. Key contents:
 **Frame discovery & I/O**
 - `list_frames(input_dir, pattern)` — frame paths in temporal order.
 - `find_shots(input_dir, pattern)` — the shot folder(s) to process: the folder
-  itself, or its subfolders holding frames (batch mode).
+  itself, or every folder below it holding frames, at any depth (batch mode).
 - `shot_paths(shot_dir, out_dir)` → `ShotPaths` — every output path of a
   shot (folder, prefixed files, per-event folders); `output_base(events_csv)`
   — the prefix detection's other files share with the events CSV.
@@ -848,6 +999,15 @@ Imported by both scripts; not run directly. Key contents:
 - `candidates(...)` — one reported track per front.
 - `sensitivity(model, p, ...)` — faintest front the search would report.
 - `draw_xt(ax, ...)` — plot helper.
+
+### `tube.py`
+
+- `detect_tube(bg, sigma)` → `(Tube, "")` or `(None, reason)`.
+- `Tube` — `angle_deg`, `rho_bore` / `bore_slope` (each bore edge as a line),
+  `rho_wall`, `rho_outer`, `segments` (visible stretches); `coords(shape)` gives
+  the (s, rho) of every pixel, `bore_mask(shape)` the bore pixels where the
+  bore is seen, and `bore_edges(s)` / `bore_at(s)` the edges / width along it.
+- `save` / `load` — `NAME_tube.json`.
 
 ### `dashboard.py` (+ `dashboard_template.html`)
 
@@ -915,7 +1075,8 @@ inflation is far above 1, the per-pixel noise is strongly correlated and a large
   a departure from the background and not within the per-pixel noise.
 - **`FileNotFoundError: No frames matching ...`** — check `--pattern` and the
   directory path. For a campaign folder, the frames must sit directly inside
-  each shot subfolder (only one level is searched).
+  each shot folder (shot folders can be nested at any depth; hidden folders
+  and `*_analysis` folders are not searched).
 - **"ffmpeg not found, skipping the MP4 movies"** — install ffmpeg (see
   [requirements](#installation--requirements)), or pass `--no-movie`.
 - **A shot is "skipped" in batch mode** — its outputs already exist; delete them

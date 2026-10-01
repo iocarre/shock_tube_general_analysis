@@ -36,8 +36,8 @@ file (see ``dashboard``).
 By default it reads ``<run>_analysis/<run>_events.csv`` and writes into the same
 folder, next to the frame folder; every file is prefixed with ``<run>`` and each
 event's files go into an ``event_<id>/`` subfolder. If the input folder holds no
-frames itself, each of its subfolders that does is processed in turn (batch
-mode), skipping those whose ``<run>_events_summary.csv`` exists unless
+frames itself, every folder below it that does, at any depth, is processed in
+turn (batch mode), skipping those whose ``<run>_events_summary.csv`` exists unless
 ``--force`` is given.
 
 Example
@@ -61,6 +61,7 @@ import numpy as np
 import change_common as cc
 import dashboard
 import event_overview as ov
+import front_sheet
 
 
 def load_events(path):
@@ -431,7 +432,8 @@ def build_parser():
         description="Characterise detected change events.")
     ap.add_argument("input_dir",
                     help="Directory of single-frame TIFFs, or a directory of "
-                         "such directories (batch mode: each one is a shot).")
+                         "such directories, nested at any depth (batch mode: "
+                         "each one is a shot).")
     ap.add_argument("events_csv", nargs="?", default=None,
                     help="CSV from detect_activity.py (default: "
                          "NAME_events.csv in the output folder; single shot "
@@ -502,6 +504,12 @@ def add_analysis_options(ap):
                    help="Write NAME_dashboard.html (self-contained, "
                         "interactive) for each shot, and the campaign "
                         "dashboard after a batch run.")
+    g.add_argument("--front-sheets", action=argparse.BooleanOptionalAction,
+                   default=True,
+                   help="Write tube_fronts/NAME_tube_front_<id>.png for each "
+                        "front found in a micro-tube: frames, x-t inside vs "
+                        "outside the walls, position vs time, profile across "
+                        "the tube.")
     g.add_argument("--overview", action=argparse.BooleanOptionalAction,
                    default=True,
                    help="Write NAME_overview.png: shock-search verdict, x-t "
@@ -550,15 +558,16 @@ def main(argv=None):
 
 def prune(out_dir, written):
     """
-    Remove what an earlier run left in the event and moment folders and this
-    run did not write again (events that no longer exist, a movie now switched
-    off, ...). Files are overwritten in place rather than deleted and
+    Remove what an earlier run left in the event, moment and tube-front
+    folders and this run did not write again (events that no longer exist, a
+    movie now switched off, ...). Files are overwritten in place rather than deleted and
     recreated, which cloud-synced folders (iCloud Desktop) handle better.
     """
     for name in os.listdir(out_dir):
         path = os.path.join(out_dir, name)
         if not (os.path.isdir(path) and
-                (re.fullmatch(r"event_\d+", name) or name == "moments")):
+                (re.fullmatch(r"event_\d+", name)
+                 or name in ("moments", "tube_fronts"))):
             continue
         if not any(w.startswith(path + os.sep) for w in written):
             _remove_tree(path)
@@ -669,6 +678,12 @@ def run(p):
     if p.overview:
         path = ov.make_overview(p, summaries, tiles, files, moments, m_tiles)
         print(f"[analyze] wrote {path}", file=sys.stderr)
+    if p.front_sheets:
+        sheets = front_sheet.make_sheets(p, files)
+        written.update(sheets)
+        if sheets:
+            print(f"[analyze] wrote {len(sheets)} tube-front sheet(s) -> "
+                  f"{os.path.dirname(sheets[0])}", file=sys.stderr)
 
     summary_path = p.paths.summary
     cols = list(ov.FIRST_COLS)

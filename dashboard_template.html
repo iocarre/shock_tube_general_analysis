@@ -97,6 +97,7 @@ dl.kv dt { color: var(--ink-2); }
 dl.kv dd { margin: 0; font-variant-numeric: tabular-nums; }
 .grid2 { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
 .explorer { display: grid; grid-template-columns: 3fr 1fr 1fr; gap: 10px; position: relative; }
+.explorer.two { grid-template-columns: 2fr 2fr 1fr 1fr; }
 .panel { position: relative; min-width: 0; }
 .panel .ptitle { font-size: 12.5px; color: var(--ink-2); margin-bottom: 4px; height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .panel canvas { position: absolute; image-rendering: pixelated; }
@@ -136,7 +137,7 @@ details > summary { cursor: pointer; color: var(--ink-2); margin: 4px 0; }
 .multi { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; }
 .multi .mname { font-size: 12.5px; color: var(--ink-2); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 760px) {
-  .explorer { grid-template-columns: 1fr; }
+  .explorer, .explorer.two { grid-template-columns: 1fr; }
   .multi { grid-template-columns: 70px 1fr; }
 }
 </style>
@@ -375,6 +376,11 @@ function shotPage(app) {
       tiles.append(tile("Sensitivity", fmt(V.sens8, 2) + " %",
         "faintest full-height front reported over 8 frames (% of brightness)"));
   } else tiles.append(tile("Shock search", "not run", "no detection data"));
+  const TV = V.tube;
+  if (TV) tiles.append(TV.found
+    ? tile("Micro-tube", TV.n_cands ? `${TV.n_cands} front${TV.n_cands > 1 ? "s" : ""} in the bore` : "No front in the bore",
+        `${TV.n_cands ? TV.n_inside + " inside the tube · " : ""}bore ${fmt(TV.bore_px, 2)} px, ${fmt(TV.angle_deg, 2)}°`)
+    : tile("Micro-tube", "None", TV.reason));
   const ev = h("div", { class: "note" }, Object.keys(V.labels).length ? LABELS.filter(l => V.labels[l]).map(l => chip(l, V.labels[l])) : "none detected");
   tiles.append(h("div", { class: "tile" }, h("div", { class: "label" }, "Events"), h("div", { class: "value" }, V.n_events), ev));
   if (D.flags) {
@@ -394,6 +400,7 @@ function shotPage(app) {
   app.append(eventsCard());
   if (D.has_detection) app.append(momentsCard());
   if (V.search) app.append(candidatesCard());
+  if (V.tube && (V.tube.found || (D.tube && D.tube.image))) app.append(tubeCard());
   if (D.has_detection) app.append(infoCard());
   const st = D.static || {};
   if (st.overview || st.timeline)
@@ -404,9 +411,10 @@ function shotPage(app) {
           st.timeline ? h("figure", null, h("img", { src: st.timeline, alt: "Timeline figure" }), h("figcaption", null, "Timeline")) : null))));
 }
 
-let OFF = null;   // offscreen x-t image, rebuilt on theme change
-function buildHeat() {
-  const X = D.xt, raw = atob(X.data);
+let OFFS = new Map();   // offscreen x-t images (one per diagram), rebuilt on theme change
+function heatImage(X) {
+  if (OFFS.has(X)) return OFFS.get(X);
+  const raw = atob(X.data);
   const img = new ImageData(X.cols, X.rows);
   const hex = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16));
   const neg = hex(cssVar("--div-neg")), mid = hex(cssVar("--div-mid")), pos = hex(cssVar("--div-pos"));
@@ -416,30 +424,40 @@ function buildHeat() {
     for (let c = 0; c < 3; c++) img.data[4 * i + c] = mid[c] + (end[c] - mid[c]) * a;
     img.data[4 * i + 3] = 255;
   }
-  OFF = document.createElement("canvas");
-  OFF.width = X.cols; OFF.height = X.rows;
-  OFF.getContext("2d").putImageData(img, 0, 0);
+  const off = document.createElement("canvas");
+  off.width = X.cols; off.height = X.rows;
+  off.getContext("2d").putImageData(img, 0, 0);
+  OFFS.set(X, off);
+  return off;
 }
 
 function explorerCard() {
   const S = D.series, n = S.frame.length;
   if (!EX.b) { EX.a = 0; EX.b = n; }
-  if (!OFF) buildHeat();
-  const rawXT = atob(D.xt.data);
-  const zAt = (r, c) => (rawXT.charCodeAt(r * D.xt.cols + c) << 24 >> 24) / 127 * 4;
+  // Heat panels sharing the frame axis: the whole field, and the tube's bore when there is a tube.
+  const T = D.tube && D.tube.xt ? D.tube : null;
+  const heats = [{ X: D.xt, cands: D.cands, x0: c => c.x0_px, x1: c => c.x_end_px, field: true, posLabel: "x along the tube",
+    title: T ? "x–t diagram of the whole field (height-averaged), frames downwards" : "x–t diagram: change along the tube, frames downwards" }];
+  if (T) heats.push({ X: T.xt, cands: T.cands, x0: c => c.s0_px, x1: c => c.s_end_px, field: false, posLabel: "position along the tube",
+    title: "inside the tube's bore only" });
+  heats.forEach(hp => { hp.raw = atob(hp.X.data); hp.off = heatImage(hp.X); });
+  const NH = heats.length;
+  const zAt = (hp, r, c) => (hp.raw.charCodeAt(r * hp.X.cols + c) << 24 >> 24) / 127 * 4;
   const idxOfFrame = f => Math.min(n - 1, Math.max(0, lowerBound(S.frame, f + 0.5) - 1));
   const H = Math.round(Math.min(560, Math.max(340, innerHeight * 0.58)));
   const ML = 58, MB = 26;
 
-  const wrap = h("div", { class: "explorer" });
-  const pHeat = h("div", { class: "panel" }, h("div", { class: "ptitle" }, "x–t diagram: change along the tube, frames downwards"));
+  const wrap = h("div", { class: "explorer" + (T ? " two" : "") });
+  heats.forEach(hp => {
+    hp.panel = h("div", { class: "panel" }, h("div", { class: "ptitle" }, hp.title));
+    hp.canvas = h("canvas"); hp.panel.append(hp.canvas);
+  });
   const pAct = h("div", { class: "panel" }, h("div", { class: "ptitle" }, "Active area (px, log scale)"));
   const pLvl = h("div", { class: "panel" }, h("div", { class: "ptitle" }, "Mean brightness change (%)"));
-  wrap.append(pHeat, pAct, pLvl);
-  const canvas = h("canvas");
-  pHeat.append(canvas);
-  const svgs = [pHeat, pAct, pLvl].map(p => { const sv = s("svg"); p.append(sv); return sv; });
-  const hits = [pHeat, pAct, pLvl].map(p => { const d = h("div", { class: "hit" }); p.append(d); return d; });
+  const panels = [...heats.map(hp => hp.panel), pAct, pLvl];
+  wrap.append(...panels);
+  const svgs = panels.map(p => { const sv = s("svg"); p.append(sv); return sv; });
+  const hits = panels.map(p => { const d = h("div", { class: "hit" }); p.append(d); return d; });
 
   const eventsIdx = D.events.map(e => ({ e, a: idxOfFrame(e.fields.start_frame), b: idxOfFrame(e.fields.end_frame) }));
   const momIdx = D.moments.map(m => ({ m, i: idxOfFrame(m.frame) }));
@@ -449,38 +467,39 @@ function explorerCard() {
   function draw() {
     const a = EX.a, b = EX.b, span = b - a;
     const y = i => 20 + (i - a) / span * H;
-    // --- heat
-    const wHeat = pHeat.clientWidth - ML, dpr = devicePixelRatio || 1;
-    Object.assign(canvas.style, { left: ML + "px", top: "20px", width: wHeat + "px", height: H + "px" });
-    canvas.width = Math.max(1, Math.round(wHeat * dpr)); canvas.height = Math.round(H * dpr);
-    const ctx = canvas.getContext("2d");
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(OFF, 0, a, D.xt.cols, span, 0, 0, canvas.width, canvas.height);
-    const widthPx = D.xt.cols * D.xt.xbin;
-    const xh = px => ML + px / widthPx * wHeat;
-    const svH = svgs[0];
-    svH.setAttribute("width", pHeat.clientWidth); svH.setAttribute("height", H + 20 + MB);
-    svH.innerHTML = "";
-    const ticksI = niceTicks(S.frame[a], S.frame[b - 1], 6);
-    for (const f of ticksI) {
-      const yy = y(idxOfFrame(f));
-      svH.append(s("line", { x1: ML - 4, x2: ML, y1: yy, y2: yy, stroke: cssVar("--axis") }),
-        s("text", { x: ML - 6, y: yy + 4, "text-anchor": "end", fill: cssVar("--muted"), "font-size": 11 }, f));
-    }
-    for (const px of niceTicks(0, widthPx, 6)) {
-      svH.append(s("text", { x: xh(px), y: H + 20 + 16, "text-anchor": "middle", fill: cssVar("--muted"), "font-size": 11 }, px));
-    }
-    for (const i of flagged) if (i >= a && i < b)
-      svH.append(s("line", { x1: ML, x2: ML + wHeat, y1: y(i + 0.5), y2: y(i + 0.5), stroke: cssVar("--muted"), "stroke-width": 1.5, opacity: 0.8 }));
-    for (const c of D.cands) {
-      const i0 = idxOfFrame(c.start_frame), i1 = idxOfFrame(c.end_frame);
-      for (const off of [-16, 16])
-        svH.append(s("line", { x1: xh(c.x0_px + off), x2: xh(c.x_end_px + off), y1: y(i0), y2: y(i1 + 1), stroke: cssVar("--ink"), "stroke-width": 1.5, "stroke-dasharray": "4 3" }));
-    }
-    for (const { m, i } of momIdx) if (i >= a && i < b && m.area > 0)
-      svH.append(s("circle", { cx: xh(m.cx), cy: y(i + 0.5), r: 6, fill: "none", stroke: cssVar("--ink"), "stroke-width": 1.5 }));
-    for (const { e, a: ea, b: eb } of eventsIdx) if (eb >= a && ea < b)
-      svH.append(s("rect", { x: ML - 10, y: y(Math.max(a, ea)), width: 5, height: Math.max(3, y(Math.min(b, eb + 1)) - y(Math.max(a, ea))), rx: 1, fill: labColor(e.label) }));
+    // --- heat panels
+    heats.forEach((hp, k) => {
+      const wHeat = hp.panel.clientWidth - ML, dpr = devicePixelRatio || 1;
+      hp.w = wHeat;
+      Object.assign(hp.canvas.style, { left: ML + "px", top: "20px", width: wHeat + "px", height: H + "px" });
+      hp.canvas.width = Math.max(1, Math.round(wHeat * dpr)); hp.canvas.height = Math.round(H * dpr);
+      const ctx = hp.canvas.getContext("2d");
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(hp.off, 0, a, hp.X.cols, span, 0, 0, hp.canvas.width, hp.canvas.height);
+      const widthPx = hp.X.cols * hp.X.xbin;
+      const xh = px => ML + px / widthPx * wHeat;
+      const svH = svgs[k];
+      svH.setAttribute("width", hp.panel.clientWidth); svH.setAttribute("height", H + 20 + MB);
+      svH.innerHTML = "";
+      for (const f of niceTicks(S.frame[a], S.frame[b - 1], 6)) {
+        const yy = y(idxOfFrame(f));
+        svH.append(s("line", { x1: ML - 4, x2: ML, y1: yy, y2: yy, stroke: cssVar("--axis") }),
+          s("text", { x: ML - 6, y: yy + 4, "text-anchor": "end", fill: cssVar("--muted"), "font-size": 11 }, f));
+      }
+      for (const px of niceTicks(0, widthPx, 6))     // a tick at the right edge stays inside the panel
+        svH.append(s("text", { x: xh(px), y: H + 20 + 16, "text-anchor": xh(px) > ML + wHeat - 14 ? "end" : "middle", fill: cssVar("--muted"), "font-size": 11 }, px));
+      for (const i of flagged) if (i >= a && i < b)
+        svH.append(s("line", { x1: ML, x2: ML + wHeat, y1: y(i + 0.5), y2: y(i + 0.5), stroke: cssVar("--muted"), "stroke-width": 1.5, opacity: 0.8 }));
+      for (const c of hp.cands) {
+        const i0 = idxOfFrame(c.start_frame), i1 = idxOfFrame(c.end_frame);
+        for (const off of [-16, 16])
+          svH.append(s("line", { x1: xh(hp.x0(c) + off), x2: xh(hp.x1(c) + off), y1: y(i0), y2: y(i1 + 1), stroke: cssVar("--ink"), "stroke-width": 1.5, "stroke-dasharray": "4 3" }));
+      }
+      if (hp.field) for (const { m, i } of momIdx) if (i >= a && i < b && m.area > 0)
+        svH.append(s("circle", { cx: xh(m.cx), cy: y(i + 0.5), r: 6, fill: "none", stroke: cssVar("--ink"), "stroke-width": 1.5 }));
+      for (const { e, a: ea, b: eb } of eventsIdx) if (eb >= a && ea < b)
+        svH.append(s("rect", { x: ML - 10, y: y(Math.max(a, ea)), width: 5, height: Math.max(3, y(Math.min(b, eb + 1)) - y(Math.max(a, ea))), rx: 1, fill: labColor(e.label) }));
+    });
 
     // --- activity (symlog) and brightness
     const drawCurve = (p, sv, vals, scale, ticks, fmtT, extra) => {
@@ -504,7 +523,7 @@ function explorerCard() {
     const la = v => Math.log10(1 + Math.max(0, v));
     const sA = (v, W) => 4 + (W - 8) * la(v) / la(amax);
     const aT = [0, 1, 10, 100, 1000, 10000, 100000].filter(t => t <= amax);
-    drawCurve(pAct, svgs[1], S.area, sA, aT, t => t >= 1000 ? t / 1000 + "k" : t, (sv, W) => {
+    drawCurve(pAct, svgs[NH], S.area, sA, aT, t => t >= 1000 ? t / 1000 + "k" : t, (sv, W) => {
       for (const { e, a: ea, b: eb } of eventsIdx) if (eb >= a && ea < b)
         sv.append(s("rect", { x: 0, width: W, y: y(Math.max(a, ea)), height: Math.max(3, y(Math.min(b, eb + 1)) - y(Math.max(a, ea))), fill: labColor(e.label), opacity: 0.22 }));
       sv.append(s("line", { x1: sA(D.min_area, W), x2: sA(D.min_area, W), y1: 20, y2: H + 20, stroke: cssVar("--ink-2"), "stroke-width": 1 }));
@@ -515,13 +534,13 @@ function explorerCard() {
     const lv = S.level_pct.map(v => v === null ? 0 : v);
     const lmax = Math.max(0.05, ...lv.slice(a, b).map(Math.abs)) * 1.1;
     const sL = (v, W) => 4 + (W - 8) * (v + lmax) / (2 * lmax);
-    drawCurve(pLvl, svgs[2], lv, sL, niceTicks(-lmax, lmax, 3), t => fmtAuto(t), (sv, W) =>
+    drawCurve(pLvl, svgs[NH + 1], lv, sL, niceTicks(-lmax, lmax, 3), t => fmtAuto(t), (sv, W) =>
       sv.append(s("line", { x1: sL(0, W), x2: sL(0, W), y1: 20, y2: H + 20, stroke: cssVar("--axis") })));
 
     // hit areas
-    hits.forEach((d, k) => Object.assign(d.style, { left: (k ? 0 : ML) + "px", top: "20px",
-      width: ((k ? [pAct, pLvl][k - 1].clientWidth : wHeat)) + "px", height: H + "px" }));
-    pHeat.style.height = pAct.style.height = pLvl.style.height = (H + 20 + MB) + "px";
+    hits.forEach((d, k) => Object.assign(d.style, { left: (k < NH ? ML : 0) + "px", top: "20px",
+      width: (k < NH ? heats[k].w : panels[k].clientWidth) + "px", height: H + "px" }));
+    panels.forEach(p => p.style.height = (H + 20 + MB) + "px");
   }
 
   const cross = svgs.map(() => null);
@@ -529,8 +548,7 @@ function explorerCard() {
     svgs.forEach((sv, k) => {
       if (cross[k]) cross[k].remove();
       const yy = 20 + (i + 0.5 - EX.a) / (EX.b - EX.a) * H;
-      const W = [pHeat, pAct, pLvl][k].clientWidth;
-      cross[k] = s("line", { x1: k ? 0 : ML, x2: W, y1: yy, y2: yy, stroke: cssVar("--ink"), "stroke-width": 1, opacity: 0.55 });
+      cross[k] = s("line", { x1: k < NH ? ML : 0, x2: panels[k].clientWidth, y1: yy, y2: yy, stroke: cssVar("--ink"), "stroke-width": 1, opacity: 0.55 });
       sv.append(cross[k]);
     });
   }
@@ -543,7 +561,7 @@ function explorerCard() {
       drag.i1 = i;
       if (band) band.remove();
       const y0 = 20 + (Math.min(drag.i0, i) - EX.a) / (EX.b - EX.a) * H, y1 = 20 + (Math.max(drag.i0, i) + 1 - EX.a) / (EX.b - EX.a) * H;
-      band = s("rect", { x: ML, y: y0, width: pHeat.clientWidth - ML, height: y1 - y0, fill: cssVar("--accent"), opacity: 0.15 });
+      band = s("rect", { x: ML, y: y0, width: heats[0].panel.clientWidth - ML, height: y1 - y0, fill: cssVar("--accent"), opacity: 0.15 });
       svgs[0].append(band);
     }
     setCross(i);
@@ -551,9 +569,10 @@ function explorerCard() {
     let html = `<b>Frame ${f}${D.step > 1 ? "–" + (f + D.step - 1) : ""}</b>`;
     if (t !== null && t !== undefined) html += tipRow("from trigger", fmt(t, 1) + " µs");
     html += tipRow("active area", fmt(S.area[i]) + " px") + tipRow("brightness change", fmt(S.level_pct[i], 3) + " %");
-    if (k === 0) {
-      const c = Math.min(D.xt.cols - 1, Math.floor((e.clientX - r.left) / r.width * D.xt.cols));
-      html += tipRow("x along the tube", fmt((c + 0.5) * D.xt.xbin) + " px") + tipRow("change", fmt(zAt(i, c), 1) + " σ");
+    if (k < NH) {
+      const hp = heats[k];
+      const c = Math.min(hp.X.cols - 1, Math.floor((e.clientX - r.left) / r.width * hp.X.cols));
+      html += tipRow(hp.posLabel, fmt((c + 0.5) * hp.X.xbin) + " px") + tipRow("change", fmt(zAt(hp, i, c), 1) + " σ");
     }
     const hit = eventsIdx.find(o => i >= o.a && i <= o.b);
     if (hit) html += `<div style="margin-top:4px">${chip(hit.e.label).outerHTML} event ${hit.e.id} · click to open</div>`;
@@ -597,14 +616,16 @@ function explorerCard() {
     h("button", { class: "btn", onclick: () => { EX.a = 0; EX.b = n; draw(); } }, "Whole recording"),
     h("span", { class: "muted" }, "Drag vertically to zoom on frames · double-click to reset · click an event mark to open it"));
   const usedLabels = LABELS.filter(l => D.events.some(e => e.label === l));
+  const anyCands = heats.some(hp => hp.cands.length);
   const leg = h("div", { class: "legend" },
     h("span", { class: "key" }, h("span", { class: "sw", style: { background: `linear-gradient(90deg, ${cssVar("--div-neg")}, ${cssVar("--div-mid")}, ${cssVar("--div-pos")})`, width: "42px" } }), "darker ← change → brighter (±4 σ)"),
     h("span", { class: "key" }, h("span", { class: "ln", style: { borderColor: cssVar("--muted") } }), "flagged frame (trigger, flash)"),
-    D.cands.length ? h("span", { class: "key" }, h("span", { class: "ln", style: { borderColor: cssVar("--ink"), borderTopStyle: "dashed" } }), "shock candidate (between the dashes)") : null,
+    anyCands ? h("span", { class: "key" }, h("span", { class: "ln", style: { borderColor: cssVar("--ink"), borderTopStyle: "dashed" } }), "moving front found (between the dashes)") : null,
     D.moments.length ? h("span", { class: "key" }, "○ / ◂ strongest moments below threshold") : null,
     usedLabels.map(l => h("span", { class: "key" }, h("span", { class: "sw", style: { background: labColor(l) } }), l)));
   const c = card("Explore the recording",
     "A shock crossing the field draws a straight slanted line in the x–t diagram; a flash or camera glitch is a horizontal line; dust leaves short specks. " +
+    (T ? "The second diagram uses only the pixels inside the micro-tube's bore, so a front travelling in the tube keeps its full strength there. " : "") +
     (D.step > 1 ? `Each row shows ${D.step} frames (the strongest value is kept); zoom in to see single frames.` : ""),
     tools, leg, wrap);
   requestAnimationFrame(draw);
@@ -742,6 +763,54 @@ function candidatesCard() {
     body, h("h3", { style: { marginTop: "14px" } }, "Sensitivity"), sensTable);
 }
 
+const WHERE = { "inside": "inside the tube", "outside too": "outside too: a wave outside the tube, seen through it", "unclear": "unclear",
+  "tube moving": "the tube itself moves: may be its walls moving, not a front" };
+
+function sensTable(sens, what) {
+  return h("table", { style: { maxWidth: "460px" } },
+    h("thead", null, h("tr", null, h("th", null, what), h("th", { class: "num" }, "% of brightness"), h("th", { class: "num" }, "pixel-noise σ"))),
+    h("tbody", null, (sens || []).map(([k, a, p]) => h("tr", null, h("td", null, `${k} frames`), h("td", { class: "num" }, fmt(p, 2) + " %"), h("td", { class: "num" }, fmt(a, 2) + " σ")))));
+}
+
+function tubeCard() {
+  const TV = D.verdict.tube || {}, T = D.tube || {};
+  const img = T.image ? h("img", { src: T.image, alt: "Micro-tube found in the background image", style: { width: "100%", maxWidth: "1000px", display: "block", border: "1px solid var(--border)", borderRadius: "6px", background: "#fff" } }) : null;
+  if (!TV.found) return card("Micro-tube", "No tube: " + (TV.reason || "not searched"), img);
+  const ends = TV.bore_px_ends || [];
+  const bore = ends.length === 2 && Math.abs(ends[1] - ends[0]) >= 0.5 ? `tapered ${fmt(ends[0], 1)} → ${fmt(ends[1], 1)} px` : fmt(TV.bore_px, 2) + " px";
+  const facts = h("dl", { class: "kv" }, [["Bore (inner width)", bore], ["Angle", fmt(TV.angle_deg, 2) + "°"],
+    ["Seen over", fmt(TV.seen_px) + " px" + (TV.n_segments > 1 ? ` in ${TV.n_segments} stretches` : "")],
+    ["Best track score in the bore", fmt(TV.best_score, 1)]].flatMap(([k, v]) => [h("dt", null, k), h("dd", null, v)]));
+  const C = T.cands || [];
+  const body = C.length ? sortableTable([
+    { key: "candidate_id", title: "#", num: true },
+    { key: "score", title: "Score (σ)", num: true, render: c => fmt(c.score, 1) },
+    { key: "where", title: "Where", render: c => WHERE[c.where] || c.where || "–" },
+    { key: "outside_score", title: "Outside the walls (σ)", num: true, render: c => c.outside_score === null || c.outside_score === undefined ? "–" : fmt(c.outside_score, 1) },
+    { key: "tube_shift_px", title: "Tube moved (px)", num: true, render: c => c.tube_shift_px === null || c.tube_shift_px === undefined ? "–" : fmt(c.tube_shift_px, 2) },
+    { key: "start_frame", title: "Frames", render: c => `${c.start_frame}–${c.end_frame}` },
+    { key: "v_px_per_frame", title: "Speed along the tube", num: true, render: c => fmt(c.v_px_per_frame, 1) + " px/frame" + (c.v_m_per_s ? ` (${fmt(c.v_m_per_s, 0)} m/s)` : "") },
+    { key: "x0_px", title: "x in the frame (px)", num: true, render: c => `${fmt(c.x0_px)} → ${fmt(c.x_end_px)}` },
+    { key: "polarity", title: "Polarity" },
+  ], C, { onRow: c => EX.zoomTo && EX.zoomTo(c.start_frame - 20, c.end_frame + 20) })
+    : h("p", null, `No moving front in the bore: the best straight track scored ${fmt(TV.best_score, 1)}, below the report threshold of ${fmt(D.verdict.shock_k, 0)}.`);
+  return card("Micro-tube",
+    "Found automatically in the background image (orange: bore edges; blue: ends of each visible stretch). The second x–t diagram above uses only the bore's pixels. " +
+    "Each front found there is checked against a band just outside the walls: a wave travelling outside the tube crosses the bore's rows in the picture too, but then it also shows outside the walls.",
+    img, h("div", { class: "grid2", style: { marginTop: "12px" } }, facts, h("div", null, h("h3", null, "Sensitivity in the bore"), sensTable(TV.sens, "Front filling the bore, seen over"))),
+    h("h3", { style: { marginTop: "14px" } }, "Fronts found in the bore"), body,
+    (T.sheets || []).length ? h("div", null,
+      h("h3", { style: { marginTop: "14px" } }, "One sheet per front"),
+      h("p", { class: "muted", style: { fontSize: "12.5px" } },
+        "Frames along the track (○ inside, □ outside too, ◇ unclear, ✕ tube moving), the x–t diagrams inside the bore and just outside the walls, position against time, and the profile across the tube at the front."),
+      T.sheets.map(sh => {
+        const c = (T.cands || []).find(x => x.candidate_id === sh.id) || {};
+        return h("details", { open: T.sheets.length <= 2 ? true : null },
+          h("summary", null, `Front ${sh.id}: ${WHERE[c.where] || c.where || ""}, frames ${c.start_frame}–${c.end_frame}`),
+          h("img", { src: sh.image, alt: `Sheet of front ${sh.id}`, style: { width: "100%", maxWidth: "1300px", display: "block", margin: "8px 0", border: "1px solid var(--border)", borderRadius: "6px", background: "#fff" } }));
+      })) : null);
+}
+
 function infoCard() {
   const M = D.meta || {}, P = D.params || {}, St = D.stats || {};
   const kv = obj => h("dl", { class: "kv" }, Object.entries(obj).filter(([, v]) => v !== null && v !== undefined && v !== "")
@@ -779,6 +848,13 @@ function campaignPage(app) {
     R.some(r => r.verdict.search)
       ? tile("Shock candidates", nC, nC ? "see the shots marked below" : "no moving front found in any shot")
       : tile("Shock candidates", "–", "shock search not run (older results)"),
+    (() => {
+      const tubed = R.filter(r => r.verdict.tube && r.verdict.tube.found);
+      if (!R.some(r => r.verdict.tube)) return null;
+      const withFront = tubed.filter(r => r.verdict.tube.n_inside > 0).length;
+      return tile("Fronts inside a tube", `${withFront} of ${tubed.length} shot${tubed.length === 1 ? "" : "s"}`,
+        `${tubed.length} of ${R.length} shots have a micro-tube`);
+    })(),
     h("div", { class: "tile" }, h("div", { class: "label" }, "Events"), h("div", { class: "value" }, R.reduce((a, r) => a + r.verdict.n_events, 0)),
       h("div", { class: "note" }, LABELS.filter(l => labels[l]).map(l => chip(l, labels[l])))),
     sens.length ? tile("Sensitivity", (Math.min(...sens).toFixed(2) === Math.max(...sens).toFixed(2) ? fmt(sens[0], 2) : `${fmt(Math.min(...sens), 2)}–${fmt(Math.max(...sens), 2)}`) + " %",
@@ -800,6 +876,10 @@ function campaignPage(app) {
       { key: "trigger_frame", title: "Trigger", num: true },
       { key: "ev", title: "Events", value: r => r.verdict.n_events, render: r => r.verdict.n_events ? LABELS.filter(l => r.verdict.labels[l]).map(l => chip(l, r.verdict.labels[l])) : h("span", { class: "muted" }, "none") },
       { key: "cands", title: "Shock cand.", num: true, value: r => r.verdict.n_cands, render: r => r.verdict.search ? `${r.verdict.n_cands} (best ${fmt(r.verdict.best_score, 1)})` : "–" },
+      { key: "tube", title: "Tube bore", num: true, value: r => r.verdict.tube && r.verdict.tube.found ? r.verdict.tube.bore_px : null,
+        render: r => !r.verdict.tube ? "–" : r.verdict.tube.found ? fmt(r.verdict.tube.bore_px, 2) + " px" : h("span", { class: "muted", title: r.verdict.tube.reason }, "none") },
+      { key: "tube_cands", title: "Fronts in tube", num: true, value: r => r.verdict.tube && r.verdict.tube.found ? r.verdict.tube.n_inside : null,
+        render: r => r.verdict.tube && r.verdict.tube.found ? `${r.verdict.tube.n_inside} inside` + (r.verdict.tube.n_cands > r.verdict.tube.n_inside ? ` (+${r.verdict.tube.n_cands - r.verdict.tube.n_inside})` : "") : "–" },
       { key: "sens", title: "Sensitivity", num: true, value: r => r.verdict.sens8, render: r => r.verdict.sens8 ? fmt(r.verdict.sens8, 2) + " %" : "–" },
       { key: "noise", title: "Pixel noise", num: true, value: r => r.stats.noise_pct, render: r => r.stats.noise_pct ? fmt(r.stats.noise_pct, 2) + " %" : "–" },
       { key: "bright", title: "Brightness", num: true, value: r => r.stats.brightness, render: r => fmt(r.stats.brightness) },
@@ -892,7 +972,7 @@ function render() {
   const app = $("#app");
   app.innerHTML = "";
   hideTip();
-  OFF = null;
+  OFFS = new Map();
   if (D.page === "campaign") campaignPage(app); else shotPage(app);
 }
 render();

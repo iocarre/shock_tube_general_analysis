@@ -8,11 +8,13 @@ so they can be opened offline, moved or e-mailed on their own:
 
   * **shot dashboard** ``NAME_analysis/NAME_dashboard.html``: the verdict, the
     camera and analysis settings, an interactive x-t diagram linked to the
-    activity and brightness curves (drag to zoom, click an event), the events
+    activity and brightness curves (drag to zoom, click an event) -- with a
+    second one of the micro-tube's bore when there is a tube --, the events
     table with each event's images and curve, the strongest moments below the
-    thresholds, and the shock-search candidates;
+    thresholds, and the moving fronts found (in the field and in the tube);
   * **campaign dashboard** ``CAMPAIGN/CAMPAIGN_dashboard.html``: one row per
-    shot, automatic data checks (duplicate recordings, incomplete exports,
+    shot (at any depth below CAMPAIGN, named by its path, e.g. ``Day1/T3``),
+    automatic data checks (duplicate recordings, incomplete exports,
     missing metadata, shots not analysed yet) and plots comparing the shots
     (sensitivity, noise, brightness, events, activity around the trigger).
     Its links to the shot dashboards work while the folders stay together.
@@ -30,7 +32,6 @@ import argparse
 import base64
 import csv
 import datetime as _dt
-import glob
 import io
 import json
 import os
@@ -136,6 +137,8 @@ def load_shot(adir):
             "events": _read_csv(paths.events),
             "summary": _read_csv(paths.summary),
             "shocks": _read_csv(paths.shocks),
+            "tube_shocks": _read_csv(paths.tube_shocks),
+            "tube": _jsonload(act, "tube_json") if act else {},
             "moments": _read_csv(paths.moments),
             "meta": _jsonload(act, "meta_json") if act else {},
             "params": _jsonload(act, "params_json") if act else {},
@@ -161,6 +164,24 @@ def _verdict(shot):
         v.update(search=True, best_score=float(act["best_score"]),
                  shock_k=float(act["shock_k"]), sens=sens,
                  sens8=next((p for k, a, p in sens if k == 8), None))
+    if act is not None:
+        t, tc = shot["tube"], shot["tube_shocks"]
+        tsens = [[int(k), float(a), float(p)]
+                 for k, a, p in act.get("tube_sensitivity", [])]
+        v["tube"] = ({"found": True, "bore_px": t.get("bore_px"),
+                      "bore_px_ends": t.get("bore_px_ends"),
+                      "angle_deg": t.get("angle_deg"),
+                      "seen_px": t.get("seen_px"),
+                      "n_segments": len(t.get("segments", [])),
+                      "n_cands": len(tc),
+                      "n_inside": sum(c.get("where") == "inside" for c in tc),
+                      "best_score": float(act.get("tube_best_score", 0.0)),
+                      "sens": tsens,
+                      "sens8": next((p for k, a, p in tsens if k == 8), None)}
+                     if t else {"found": False,
+                                "reason": str(act.get("tube_reason",
+                                                      "not searched (older "
+                                                      "detection results)"))})
     if shot["moments"]:
         big = max(shot["moments"], key=lambda m: int(m["area_px"]))
         v["largest_moment"] = {"frame": int(big["frame"]),
@@ -180,10 +201,10 @@ def _series(act, step):
             "t_us": _block(t, step, "first")}
 
 
-def _xt_payload(act, step):
+def _xt_payload(act, step, key="xt"):
     """The unit-noise x-t diagram, block-reduced (strongest value kept) and
     quantised to int8 for embedding."""
-    z, _ = xtd.normalise(act["xt"], _flagged(act))
+    z, _ = xtd.normalise(act[key], _flagged(act))
     T, W = z.shape
     n = int(np.ceil(T / step))
     zp = np.concatenate([z, np.zeros((n * step - T, W), z.dtype)])
@@ -269,6 +290,20 @@ def shot_payload(shot, campaign_href=None):
          "image": _uri(paths.moment_image(m["rank"]), 1000)}
         for m in shot["moments"]]
     data["cands"] = [{k: _num(v) for k, v in c.items()} for c in shot["shocks"]]
+    if act is not None and "tube_xt" in act:
+        data["tube"] = {
+            "xt": _xt_payload(act, data["step"], "tube_xt"),
+            "cands": [{k: _num(v) for k, v in c.items()}
+                      for c in shot["tube_shocks"]],
+            "image": _uri(paths.tube_png, 1600),
+            "sheets": [{"id": int(c["candidate_id"]),
+                        "image": _uri(paths.tube_front_sheet(
+                            c["candidate_id"]), 1500)}
+                       for c in shot["tube_shocks"]
+                       if os.path.exists(paths.tube_front_sheet(
+                           c["candidate_id"]))]}
+    elif os.path.exists(paths.tube_png):
+        data["tube"] = {"image": _uri(paths.tube_png, 1600)}
     data["static"] = {"overview": _uri(paths.overview, 1800),
                       "timeline": _uri(paths.timeline, 1400)}
     return data
@@ -289,12 +324,31 @@ def _campaign_file(campaign_dir):
                         os.path.basename(campaign_dir) + "_dashboard.html")
 
 
-def build_shot(adir):
-    """Write ``NAME_dashboard.html`` in the analysis folder; returns its path."""
+def _ancestor_campaigns(path):
+    """Existing campaign dashboards in the folders above ``path``, nearest
+    first (a shot can sit several folder levels below its campaign)."""
+    out, d = [], os.path.dirname(os.path.abspath(path))
+    while True:
+        if os.path.exists(_campaign_file(d)):
+            out.append(d)
+        up = os.path.dirname(d)
+        if up == d:
+            return out
+        d = up
+
+
+def build_shot(adir, campaign_dir=None):
+    """Write ``NAME_dashboard.html`` in the analysis folder; returns its path.
+    Its back-link goes to ``campaign_dir``'s dashboard, by default the nearest
+    one above it."""
     shot = load_shot(adir)
-    parent = os.path.dirname(os.path.normpath(adir))
-    camp = _campaign_file(parent)
-    href = "../" + os.path.basename(camp) if os.path.exists(camp) else None
+    if campaign_dir is None:
+        found = _ancestor_campaigns(adir)
+        campaign_dir = found[0] if found else None
+    href = None
+    if campaign_dir is not None:
+        rel = os.path.relpath(_campaign_file(campaign_dir), shot["dir"])
+        href = rel.replace(os.sep, "/")
     return _render(shot_payload(shot, href), shot["paths"].dashboard,
                    f"{shot['name']} dashboard")
 
@@ -371,11 +425,11 @@ def data_checks(shots, campaign_dir):
                            "analysis incomplete", "detail": "Events were "
                            "detected but not analysed."})
     # Frame folders without results.
-    done = {s["name"] for s in shots}
-    for d in sorted(glob.glob(os.path.join(campaign_dir, "*"))):
-        n = os.path.basename(d)
-        if os.path.isdir(d) and not n.endswith("_analysis") and \
-                n not in done and glob.glob(os.path.join(d, "*.tif")):
+    adirs, frame_dirs = campaign_tree(campaign_dir)
+    done = set(adirs)
+    for d in frame_dirs:
+        if d + "_analysis" not in done:
+            n = os.path.relpath(d, campaign_dir)
             checks.append({"level": "warning", "title": f"{n}: not analysed",
                            "detail": "Frames present but no analysis folder."})
     # Settings that differ between shots.
@@ -430,9 +484,26 @@ def campaign_payload(shots, campaign_dir):
             "shots": rows, "checks": data_checks(shots, campaign_dir)}
 
 
+def campaign_tree(campaign_dir, pattern="*.tif"):
+    """
+    ``(analysis_dirs, frame_dirs)`` found below ``campaign_dir`` at any depth,
+    the way the scripts find shots: the search does not go inside a frame
+    folder nor an analysis folder.
+    """
+    campaign_dir = os.path.normpath(campaign_dir)
+    adirs, frame_dirs, todo = [], [], [campaign_dir]
+    while todo:
+        d = todo.pop()
+        has, subdirs = cc._scan(d, pattern)
+        if has:
+            frame_dirs.append(d)
+        for s in subdirs:
+            (adirs if s.endswith("_analysis") else todo).append(s)
+    return sorted(adirs), sorted(frame_dirs)
+
+
 def analysis_dirs(campaign_dir):
-    return sorted(d for d in glob.glob(os.path.join(campaign_dir, "*_analysis"))
-                  if os.path.isdir(d))
+    return campaign_tree(campaign_dir)[0]
 
 
 def build_campaign(campaign_dir, shots_too=True):
@@ -440,22 +511,24 @@ def build_campaign(campaign_dir, shots_too=True):
     dirs = analysis_dirs(campaign_dir)
     path = _campaign_file(campaign_dir)
     shots = [load_shot(d) for d in dirs]
+    for s in shots:                     # sub/folder/NAME when nested
+        s["name"] = os.path.relpath(s["dir"], campaign_dir)[:-len("_analysis")]
     _render(campaign_payload(shots, campaign_dir), path,
             f"{os.path.basename(os.path.normpath(campaign_dir))} dashboard")
     if shots_too:                       # now the back-links can point to it
         for d in dirs:
-            build_shot(d)
+            build_shot(d, campaign_dir)
     return path
 
 
 def after_run(input_dir, batch, enabled):
     """Called by the scripts after a run: refresh the campaign dashboard after
-    a batch, or after a single shot when its campaign already has one."""
+    a batch, or after a single shot every campaign dashboard above it."""
     if not enabled:
         return
-    campaign = input_dir if batch else os.path.dirname(
+    campaigns = [input_dir] if batch else _ancestor_campaigns(
         os.path.normpath(input_dir))
-    if batch or os.path.exists(_campaign_file(campaign)):
+    for campaign in campaigns:
         path = build_campaign(campaign, shots_too=batch)
         print(f"[dashboard] wrote {path}", file=sys.stderr)
 

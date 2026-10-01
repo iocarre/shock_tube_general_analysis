@@ -19,12 +19,14 @@ it (``--out-dir`` to change), every file prefixed with ``NAME``:
   * ``NAME_timeline.png``        -- x-t diagram + activity (``--no-plot-timeline``)
   * ``NAME_activity.npz``        -- per-frame arrays, x-t diagram
   * ``NAME_moments.csv``         -- strongest moments below the thresholds
+  * ``NAME_tube.png`` / ``.json`` -- the micro-tube found (``--tube off``)
+  * ``NAME_tube_shocks.csv``     -- fronts found inside the tube's bore
   * ``event_<id>/``              -- per-event CSV, plots, frames and MP4
                                     (``--no-plots``, ``--no-dump-frames``,
                                     ``--no-movie`` to trim)
 
-If the input folder holds no frames itself, each of its subfolders that does is
-treated as a shot (batch mode), and ``CAMPAIGN_dashboard.html`` is written in it
+If the input folder holds no frames itself, every folder below it that does, at
+any depth, is treated as a shot (batch mode), and ``CAMPAIGN_dashboard.html`` is written in it
 at the end. A shot whose ``NAME_events.csv`` and
 ``NAME_events_summary.csv`` both exist is skipped; one with only
 ``NAME_events.csv`` gets the analysis step only. ``--force`` redoes everything. A failing shot does not stop the others.

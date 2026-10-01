@@ -34,6 +34,11 @@ How
    as a shock -- summing the signal along each track so fronts too faint for
    any single frame are still found (see ``xt_diagram``). Also estimates the
    faintest front the search would have reported.
+6. Look for a straight **micro-tube** in the background image (see ``tube``).
+   When there is one, build a second x-t diagram from the pixels **inside its
+   bore** only and run the same search on it: a front travelling inside the
+   tube is only a few px high, so the height-averaged diagram dilutes it, while
+   the bore diagram keeps its full strength.
 
 It scales to long recordings: the background uses only a bounded sample, and the
 streaming pass holds one frame at a time (plus the fixed-size background maps).
@@ -49,7 +54,11 @@ Outputs, in ``<run>_analysis/`` next to the frame folder ``<run>``
   * ``<run>_activity.npz``  per-frame arrays and the x-t diagram, read by the
                             analysis overview;
   * ``<run>_moments.csv``   the strongest moments outside the events (below
-                            the event thresholds).
+                            the event thresholds);
+  * ``<run>_tube.json`` / ``<run>_tube.png``  the micro-tube found (or why
+                            none), drawn on the background;
+  * ``<run>_tube_shocks.csv``  fronts found inside the tube's bore (only
+                            when there is a tube).
 
 Runs of flagged frames outside any event (the trigger frame, flashes) become
 short events of their own, so they are always analysed and shown.
@@ -57,8 +66,8 @@ short events of their own, so they are always analysed and shown.
 Feed the CSV to ``analyze_activity.py`` (Script 2) to characterise and label
 each event, or run both steps at once with ``full_detect_analysis.py``.
 
-If the input folder holds no frames itself, each of its subfolders that does is
-processed in turn (batch mode), skipping those whose ``<run>_events.csv``
+If the input folder holds no frames itself, every folder below it that does, at
+any depth, is processed in turn (batch mode), skipping those whose ``<run>_events.csv``
 exists unless ``--force`` is given.
 
 Example
@@ -81,6 +90,7 @@ import time
 import numpy as np
 
 import change_common as cc
+import tube as tubemod
 import xt_diagram as xtd
 
 
@@ -88,11 +98,14 @@ import xt_diagram as xtd
 # Streaming per-frame activity
 # --------------------------------------------------------------------------- #
 
-def measure_all(files, model, p):
+def measure_all(files, model, p, bore=None, sleeve=None, mover=None):
     """
     Stream every frame and return per-frame arrays:
     area, peak_snr, energy, centroid x/y, polarity, signed mean SNR, mean
-    brightness of the measured pixels, and the x-t diagram rows.
+    brightness of the measured pixels, and the x-t diagram rows -- plus, with
+    ``bore`` / ``sleeve`` samplers (tube.BoreSampler), the rows of the
+    diagrams of the tube's bore and of a band just outside its walls, and
+    with ``mover`` (tube.TubeShift) how far the tube moved in each frame.
     """
     n = len(files)
     area = np.zeros(n, dtype=np.int64)
@@ -106,6 +119,11 @@ def measure_all(files, model, p):
     level = np.zeros(n, dtype=np.float32)
     fhash = np.zeros(n, dtype=np.uint64)
     xt = np.zeros((n, model.bg.shape[1] // p.xt_bin), dtype=np.float32)
+    tube_xt = (np.zeros((n, bore.nbins), dtype=np.float32) if bore is not None
+               else None)
+    sleeve_xt = (np.zeros((n, sleeve.nbins), dtype=np.float32)
+                 if sleeve is not None else None)
+    tube_shift = np.zeros(n, dtype=np.float32) if mover is not None else None
 
     for i, path in enumerate(files):
         frame = cc.load_frame(path, p.row_lo, p.row_hi, p.col_lo, p.col_hi,
@@ -118,6 +136,12 @@ def measure_all(files, model, p):
         fhash[i] = int.from_bytes(hashlib.blake2b(
             frame.tobytes(), digest_size=8).digest(), "little")
         xt[i] = xtd.xt_row(snr, model.valid, p.xt_bin)
+        if bore is not None:
+            tube_xt[i] = bore.row(frame, model.bg, model.sigma)
+        if sleeve is not None:
+            sleeve_xt[i] = sleeve.row(frame, model.bg, model.sigma)
+        if mover is not None:
+            tube_shift[i] = mover.shift(frame, model.bg)
         area[i] = m.area
         peak[i] = m.peak_snr
         energy[i] = m.energy
@@ -129,9 +153,16 @@ def measure_all(files, model, p):
         if (i + 1) % 20000 == 0:
             print(f"[detect]  processed {i + 1}/{n}", file=sys.stderr)
 
-    return dict(area=area, peak=peak, energy=energy, cx=cx, cy=cy,
-                polar=polar, mean_snr=mean_snr, fnum=fnum, level=level,
-                xt=xt, frame_hash=fhash)
+    out = dict(area=area, peak=peak, energy=energy, cx=cx, cy=cy,
+               polar=polar, mean_snr=mean_snr, fnum=fnum, level=level,
+               xt=xt, frame_hash=fhash)
+    if tube_xt is not None:
+        out["tube_xt"] = tube_xt
+    if sleeve_xt is not None:
+        out["sleeve_xt"] = sleeve_xt
+    if tube_shift is not None:
+        out["tube_shift"] = tube_shift
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -290,19 +321,18 @@ def count_in(ev, idxs, pad=1):
     return sum(lo <= i <= hi for i in idxs)
 
 
-def shock_search(a, model, p, flagged):
+def track_search(xt, p, flagged, fnum, what):
     """
-    Look for straight slanted tracks in the x-t diagram (see xt_diagram).
-    Returns (candidates, best_score, sensitivity).
+    Look for straight slanted tracks in an x-t diagram (see xt_diagram).
+    Returns (candidates, best_score, column_scale); positions are px from the
+    diagram's first bin, speeds px/frame (and px/s, m/s when known).
     """
-    z, col_scale = xtd.normalise(a["xt"], flagged)
+    z, col_scale = xtd.normalise(xt, flagged)
     nb = z.shape[1]
     vmax = p.shock_vmax if p.shock_vmax else nb * p.xt_bin / 4.0
     score, speed, klen, nspeeds = xtd.search(z, p.shock_vmin / p.xt_bin,
                                              vmax / p.xt_bin)
     cands = xtd.candidates(score, speed, klen, z, p.shock_k, p.xt_bin)
-    sens = xtd.sensitivity(model, p, col_scale, p.xt_bin, p.shock_k)
-    fnum = a["fnum"]
     px_um = getattr(p, "px_size_um", None)
     for cid, c in enumerate(cands):
         t1 = min(len(fnum) - 1, c["t0"] + c["n_frames"] - 1)
@@ -313,16 +343,124 @@ def shock_search(a, model, p, flagged):
             c["v_px_per_s"] = c["v_px_per_frame"] * p.fps
             if px_um:
                 c["v_m_per_s"] = c["v_px_per_s"] * px_um * 1e-6
-    print(f"[detect] shock search: {nspeeds} speeds x 2 directions, "
+    best = float(score.max()) if score.size else 0.0
+    print(f"[detect] {what}: {nspeeds} speeds x 2 directions, "
           f"{p.shock_vmin:g}-{vmax:g} px/frame; best track score "
-          f"{float(score.max()):.2f} (report threshold {p.shock_k:g})",
-          file=sys.stderr)
+          f"{best:.2f} (report threshold {p.shock_k:g})", file=sys.stderr)
+    return cands, best, col_scale
+
+
+def _say_cands(cands):
+    for c in cands:
+        spd = (f", {c['v_m_per_s']:.0f} m/s" if "v_m_per_s" in c else "")
+        print(f"[detect]   candidate {c['candidate_id']}: score "
+              f"{c['score']:.1f}, frames {c['start_frame']}-"
+              f"{c['end_frame']}, from {c['x0_px']:.0f} to "
+              f"{c['x_end_px']:.0f} px, {c['v_px_per_frame']:+.1f} "
+              f"px/frame{spd}"
+              + (f" -- {c['where']}" if "where" in c else ""), file=sys.stderr)
+
+
+def _say_sensitivity(sens, what):
     if sens:
         k, (amp, pct) = 8, sens.get(8, next(iter(sens.values())))
-        print(f"[detect]   sensitivity: a full-height front of >= {amp:.2f} "
-              f"pixel-noise sigma (~{pct:.2f}% of the brightness) seen over "
-              f"{k} frames would be reported", file=sys.stderr)
-    return cands, float(score.max()), sens
+        print(f"[detect]   sensitivity: {what} of >= {amp:.2f} pixel-noise "
+              f"sigma (~{pct:.2f}% of the brightness) seen over {k} frames "
+              "would be reported", file=sys.stderr)
+
+
+TUBE_SHIFT_PX = 0.1     # tube movement that makes a bore front untrustworthy
+
+
+def inside_or_out(cands, tube_xt, sleeve_xt, flagged, xbin, shift=None):
+    """
+    Is a front found in the bore really inside the tube? A wave outside the
+    tube also crosses the bore's rows in the picture (the bore is seen
+    through it) -- but then it shows just outside the walls too, at the same
+    place and time. Sum the band outside the walls along the candidate's
+    track (where that band is lit) and compare with the bore. Adds
+    ``outside_score`` (|sum| / sqrt(points), ~|N(0, 1)| for noise) and
+    ``where`` to each candidate:
+
+      inside        nothing significant outside the walls (score < 2.5)
+      outside too   significant outside (>= 3.5) with at least half the
+                    bore's amplitude: a wave outside the tube, seen through it
+      unclear       in between, or too little lit band along the track
+      tube moving   the tube itself moved by >= TUBE_SHIFT_PX across its
+                    axis during the track (``tube_shift_px``, the largest
+                    shift outside flagged frames): its walls sweep the
+                    bore's pixels, so the front may be nothing but the
+                    walls moving
+    """
+    zi, _ = xtd.normalise(tube_xt, flagged)
+    zo, _ = xtd.normalise(sleeve_xt, flagged)
+    seen_o = np.isfinite(sleeve_xt).any(0)
+    T, W = zi.shape
+    for c in cands:
+        K = int(c["n_frames"])
+        if shift is not None:       # flagged frames: a flash fakes a shift
+            tt = [t for t in range(c["t0"], min(T, c["t0"] + K))
+                  if t not in set(flagged)]
+            c["tube_shift_px"] = (float(np.abs(shift[tt]).max()) if tt
+                                  else 0.0)
+        t = c["t0"] + np.arange(K)
+        x = np.round(c["s0_px"] / xbin - 0.5
+                     + c["v_px_per_frame"] / xbin * np.arange(K)).astype(int)
+        ok = (t < T) & (x >= 0) & (x < W)
+        t, x = t[ok], x[ok]
+        lit = seen_o[x] & (zo[t, x] != 0)          # zeroed: flagged frame
+        used = zi[t, x] != 0
+        if lit.sum() < max(2, K // 2) or not used.any():
+            c["outside_score"], c["where"] = None, "unclear"
+            continue
+        out = zo[t[lit], x[lit]]
+        s_out = abs(out.sum()) / np.sqrt(lit.sum())
+        amp_in = abs(zi[t[used], x[used]].mean())
+        c["outside_score"] = float(s_out)
+        if s_out < 2.5:
+            c["where"] = "inside"
+        elif s_out >= 3.5 and abs(out.mean()) >= 0.5 * amp_in:
+            c["where"] = "outside too"
+        else:
+            c["where"] = "unclear"
+    for c in cands:
+        if c.get("tube_shift_px", 0.0) >= TUBE_SHIFT_PX:
+            c["where"] = "tube moving"
+
+
+def shock_search(a, model, p, flagged):
+    """
+    Look for straight slanted tracks in the height-averaged x-t diagram.
+    Returns (candidates, best_score, sensitivity).
+    """
+    cands, best, col_scale = track_search(a["xt"], p, flagged, a["fnum"],
+                                          "shock search")
+    _say_cands(cands)
+    sens = xtd.sensitivity(model, p, col_scale, p.xt_bin, p.shock_k)
+    _say_sensitivity(sens, "a full-height front")
+    return cands, best, sens
+
+
+def tube_search(a, model, p, flagged, bore):
+    """
+    The same search on the bore's x-t diagram. Candidates also get their
+    start / end along the tube (``s0_px``, ``s_end_px``, from the start of
+    the tube's visible part) and in the frame (``x0_px``, ``y0_px``, ...).
+    Returns (candidates, best_score, sensitivity).
+    """
+    cands, best, col_scale = track_search(a["tube_xt"], p, flagged, a["fnum"],
+                                          "shock search inside the tube")
+    for c in cands:
+        c["s0_px"], c["s_end_px"] = c["x0_px"], c["x_end_px"]
+        (c["x0_px"], c["y0_px"]) = bore.xy(c["s0_px"])
+        (c["x_end_px"], c["y_end_px"]) = bore.xy(c["s_end_px"])
+    if "sleeve_xt" in a:
+        inside_or_out(cands, a["tube_xt"], a["sleeve_xt"], flagged, p.xt_bin,
+                      a.get("tube_shift"))
+    _say_cands(cands)
+    sens = bore.sensitivity(model.bg, model.sigma, col_scale, p.shock_k)
+    _say_sensitivity(sens, "a front filling the bore")
+    return cands, best, sens
 
 
 def frame_times(meta, n, fps):
@@ -359,7 +497,7 @@ def meta_dict(meta, n_files, fps):
 PARAM_KEYS = ["rotate", "row_lo", "row_hi", "col_lo", "col_hi", "edge_margin",
               "dark_frac", "bg_sample", "smooth", "detrend_band", "pix_k",
               "min_area", "min_len", "max_gap", "shock_k", "shock_vmin",
-              "shock_vmax", "xt_bin", "moments"]
+              "shock_vmax", "xt_bin", "moments", "tube"]
 
 
 def params_dict(p):
@@ -382,32 +520,53 @@ SHOCK_COLS = ["candidate_id", "score", "start_frame", "end_frame", "n_frames",
               "polarity", "start_index", "end_index"]
 
 
-def write_shocks(path, cands):
+TUBE_SHOCK_COLS = ["candidate_id", "score", "where", "outside_score",
+                   "tube_shift_px",
+                   "start_frame", "end_frame", "n_frames", "s0_px", "s_end_px",
+                   "v_px_per_frame", "v_px_per_s", "v_m_per_s", "polarity",
+                   "x0_px", "y0_px", "x_end_px", "y_end_px", "start_index",
+                   "end_index"]
+
+
+def write_shocks(path, cands, cols=SHOCK_COLS):
     with open(path, "w", newline="") as fh:
-        wcsv = csv.DictWriter(fh, fieldnames=SHOCK_COLS)
+        wcsv = csv.DictWriter(fh, fieldnames=cols)
         wcsv.writeheader()
         for c in cands:
             wcsv.writerow({k: (round(c[k], 3) if isinstance(c.get(k), float)
-                               else c.get(k, "")) for k in SHOCK_COLS})
+                               else c.get(k, "")) for k in cols})
 
 
 # --------------------------------------------------------------------------- #
 # Timeline plot for the whole recording: x-t diagram + activity
 # --------------------------------------------------------------------------- #
 
-def plot_timeline(a, events, p, out_png, flagged=(), cands=()):
+def plot_timeline(a, events, p, out_png, flagged=(), cands=(), tcands=()):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     fnum = a["fnum"]
-    fig, (ax1, ax2) = plt.subplots(
-        1, 2, figsize=(12, 7), sharey=True,
-        gridspec_kw=dict(width_ratios=[3, 1]))
+    tube = "tube_xt" in a
+    if tube:
+        fig, (ax1, axt, ax2) = plt.subplots(
+            1, 3, figsize=(16, 7), sharey=True,
+            gridspec_kw=dict(width_ratios=[3, 3, 1]))
+    else:
+        fig, (ax1, ax2) = plt.subplots(
+            1, 2, figsize=(12, 7), sharey=True,
+            gridspec_kw=dict(width_ratios=[3, 1]))
     z, _ = xtd.normalise(a["xt"], flagged)
     xtd.draw_xt(ax1, z, fnum, p.xt_bin, cands, flagged)
     ax1.set_title("x-t diagram (height-averaged change; yellow guides = shock "
                   "candidate, grey = flagged frame)", fontsize=9)
+    if tube:
+        zt, _ = xtd.normalise(a["tube_xt"], flagged)
+        xtd.draw_xt(axt, zt, fnum, p.xt_bin,
+                    [dict(c, x0_px=c["s0_px"]) for c in tcands], flagged)
+        axt.set_xlabel("position along the tube (px)")
+        axt.set_title("inside the tube's bore only (yellow guides = front "
+                      "candidate)", fontsize=9)
 
     ax2.plot(a["area"], fnum, lw=0.8, color="black")
     ax2.axvline(p.min_area, color="orange", lw=1.0, ls="--",
@@ -435,7 +594,8 @@ def build_parser(description="Detect frames where the open-tube scene "
     ap = argparse.ArgumentParser(description=description)
     ap.add_argument("input_dir",
                     help="Directory of single-frame TIFFs, or a directory of "
-                         "such directories (batch mode: each one is a shot).")
+                         "such directories, nested at any depth (batch mode: "
+                         "each one is a shot).")
     ap.add_argument("--pattern", default="*.tif", help="Glob for frames.")
     ap.add_argument("--out-dir", default=None,
                     help="Folder receiving every output of the shot "
@@ -519,6 +679,10 @@ def build_parser(description="Detect frames where the open-tube scene "
                         "of the frame width, i.e. seen in >= 4 frames).")
     g.add_argument("--xt-bin", type=int, default=4,
                    help="Columns merged in the x-t diagram (px).")
+    g.add_argument("--tube", choices=("auto", "off"), default="auto",
+                   help="auto: look for a straight micro-tube and, if there is "
+                        "one, also search for fronts inside its bore (see "
+                        "tube.py); off: skip.")
     g.add_argument("--moments", type=int, default=8,
                    help="List this many strongest moments outside the events "
                         "(below the event thresholds) in NAME_moments.csv and "
@@ -588,7 +752,22 @@ def run(p):
     for line in model.info:
         print(f"[detect] {line}", file=sys.stderr)
 
-    a = measure_all(files, model, p)
+    tube, bore, sleeve, mover = None, None, None, None
+    reason = "not searched (--tube off)"
+    if getattr(p, "tube", "auto") != "off":
+        tube, reason = tubemod.detect_tube(model.bg, model.sigma)
+        tubemod.write(p.paths, model.bg, tube, reason, {
+            "rotate": p.rotate, "crop": [p.row_lo, p.row_hi, p.col_lo,
+                                         p.col_hi]})
+        print(f"[detect] tube: {tubemod.describe(tube, reason)}",
+              file=sys.stderr)
+        if tube is not None:
+            bore = tubemod.BoreSampler(tube, model.bg.shape, p.xt_bin)
+            sleeve = tubemod.BoreSampler.sleeve(tube, model.bg.shape,
+                                                p.xt_bin, model.bg)
+            mover = tubemod.TubeShift(tube, model.bg)
+
+    a = measure_all(files, model, p, bore, sleeve, mover)
 
     # Diagnostic only: how the per-frame activity is distributed. Gating uses
     # the fixed --min-area, not this robust threshold.
@@ -604,24 +783,22 @@ def run(p):
               + (" ..." if len(flash) > 10 else ""), file=sys.stderr)
 
     cands, best_score, sens = [], 0.0, {}
+    tcands, tbest, tsens = [], 0.0, {}
     if p.shock_search:
         cands, best_score, sens = shock_search(a, model, p, flagged)
-        for c in cands:
-            spd = (f", {c['v_m_per_s']:.0f} m/s" if "v_m_per_s" in c else "")
-            print(f"[detect]   candidate {c['candidate_id']}: score "
-                  f"{c['score']:.1f}, frames {c['start_frame']}-"
-                  f"{c['end_frame']}, x {c['x0_px']:.0f}->{c['x_end_px']:.0f}"
-                  f" px, {c['v_px_per_frame']:+.1f} px/frame{spd}",
-                  file=sys.stderr)
+        if bore is not None:
+            tcands, tbest, tsens = tube_search(a, model, p, flagged, bore)
 
     events = add_flagged_events(group_events(a, p), a, flagged)
     for ev in events:
         ev["camera_frames"] = count_in(ev, camera)
         ev["flash_frames"] = count_in(ev, flash)
-        ev["shock_candidates"] = " ".join(
-            str(c["candidate_id"]) for c in cands
-            if c["start_index"] <= ev["end_index"] + 1
-            and c["end_index"] >= ev["start_index"] - 1)
+        for key, cs in (("shock_candidates", cands),
+                        ("tube_candidates", tcands)):
+            ev[key] = " ".join(
+                str(c["candidate_id"]) for c in cs
+                if c["start_index"] <= ev["end_index"] + 1
+                and c["end_index"] >= ev["start_index"] - 1)
     print(f"[detect] {len(events)} event(s) detected "
           f"in {time.time()-t0:.1f}s", file=sys.stderr)
     moments = strongest_moments(a, events, p.moments, flagged)
@@ -631,7 +808,7 @@ def run(p):
             "peak_snr", "peak_energy", "polarity",
             "onset_cx", "onset_cy", "peak_cx", "peak_cy",
             "camera_frames", "flash_frames", "shock_candidates",
-            "start_index", "end_index", "peak_index"]
+            "tube_candidates", "start_index", "end_index", "peak_index"]
     with open(p.out, "w", newline="") as fh:
         wcsv = csv.DictWriter(fh, fieldnames=cols)
         wcsv.writeheader()
@@ -650,6 +827,18 @@ def run(p):
     if p.shock_search:
         write_shocks(p.paths.shocks, cands)
         print(f"[detect] wrote {p.paths.shocks}", file=sys.stderr)
+    if p.shock_search and bore is not None:
+        write_shocks(p.paths.tube_shocks, tcands, TUBE_SHOCK_COLS)
+        print(f"[detect] wrote {p.paths.tube_shocks}", file=sys.stderr)
+    elif os.path.exists(p.paths.tube_shocks):     # from an earlier run
+        os.remove(p.paths.tube_shocks)
+    extra = {"tube_reason": reason}
+    if bore is not None:
+        extra = dict(
+            tube_json=json.dumps(tube.to_dict()), tube_best_score=tbest,
+            tube_seen=bore.seen,
+            tube_sensitivity=np.array([(k, v[0], v[1])
+                                       for k, v in tsens.items()]))
     if p.save_activity:
         np.savez_compressed(
             p.paths.activity, min_area=p.min_area, pix_k=p.pix_k,
@@ -665,10 +854,11 @@ def run(p):
             meta_json=json.dumps(meta_dict(meta, n, p.fps)),
             params_json=json.dumps(params_dict(p)),
             stats_json=json.dumps(model_stats(model)),
-            **a)
+            **extra, **a)
         print(f"[detect] wrote {p.paths.activity}", file=sys.stderr)
     if p.plot_timeline:
-        plot_timeline(a, events, p, p.paths.timeline, flagged, cands)
+        plot_timeline(a, events, p, p.paths.timeline, flagged, cands,
+                      tcands)
         print(f"[detect] wrote {p.paths.timeline}", file=sys.stderr)
 
 

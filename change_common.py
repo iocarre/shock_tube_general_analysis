@@ -96,7 +96,9 @@ class ShotPaths:
         NAME_analysis/
             NAME_overview.png          NAME_events.csv     NAME_shocks.csv
             NAME_events_summary.csv    NAME_timeline.png   NAME_activity.npz
-            NAME_moments.csv
+            NAME_moments.csv           NAME_tube.json      NAME_tube.png
+            NAME_tube_shocks.csv
+            tube_fronts/NAME_tube_front_<id>.png
             event_<id>/
                 NAME_event_<id>_peak.png     NAME_event_<id>_frames.csv
                 NAME_event_<id>_montage.png  NAME_event_<id>_trajectory.png
@@ -142,6 +144,22 @@ class ShotPaths:
     def dashboard(self):
         return self._f("dashboard.html")
 
+    @property
+    def tube(self):
+        return self._f("tube.json")
+
+    @property
+    def tube_png(self):
+        return self._f("tube.png")
+
+    @property
+    def tube_shocks(self):
+        return self._f("tube_shocks.csv")
+
+    def tube_front_sheet(self, cid):
+        return os.path.join(self.dir, "tube_fronts",
+                            f"{self.name}_tube_front_{cid}.png")
+
     def moment_image(self, rank):
         return os.path.join(self.dir, "moments",
                             f"{self.name}_moment_{rank}.png")
@@ -176,28 +194,51 @@ def _has_frames(d, pattern):
     return bool(glob.glob(os.path.join(d, pattern)))
 
 
+def _scan(d, pattern):
+    """
+    ``(has_frames, subdirs)`` of folder ``d`` in one pass. Stops at the first
+    frame, so a folder of a million TIFFs costs one directory read. Hidden
+    entries are ignored, as ``glob`` does (e.g. macOS ``._frame.tif``).
+    """
+    import fnmatch
+    subdirs = []
+    with os.scandir(d) as it:
+        for e in it:
+            if e.name.startswith("."):
+                continue
+            if e.is_dir():
+                subdirs.append(e.path)
+            elif fnmatch.fnmatch(e.name, pattern):
+                return True, []
+    return False, sorted(subdirs)
+
+
 def find_shots(input_dir, pattern="*.tif"):
     """
     Resolve ``input_dir`` into the shot folder(s) to process.
 
     Returns ``(shots, batch)``. If ``input_dir`` itself holds frames it is a
-    single shot (``batch=False``); otherwise every immediate subfolder that
-    holds frames is a shot (``batch=True``), ignoring ``*_analysis`` outputs.
+    single shot (``batch=False``); otherwise every folder below it, at any
+    depth, that holds frames is a shot (``batch=True``). The search does not
+    go inside a shot folder, nor into ``*_analysis`` outputs or hidden folders.
     """
     if not os.path.isdir(input_dir):
         raise FileNotFoundError(f"Not a directory: {input_dir!r}")
     if _has_frames(input_dir, pattern):
         return [input_dir], False
-    shots = sorted(
-        os.path.join(input_dir, name) for name in os.listdir(input_dir)
-        if os.path.isdir(os.path.join(input_dir, name))
-        and not name.endswith("_analysis")
-        and _has_frames(os.path.join(input_dir, name), pattern))
+    shots, todo = [], [input_dir]
+    while todo:
+        d = todo.pop()
+        has, subdirs = _scan(d, pattern)
+        if has:
+            shots.append(d)
+        else:
+            todo.extend(s for s in subdirs if not s.endswith("_analysis"))
     if not shots:
         raise FileNotFoundError(
             f"No frames matching {pattern!r} in {input_dir!r} "
             f"nor in any of its subfolders")
-    return shots, True
+    return sorted(shots), True
 
 
 def check_batch_args(ap, p, batch, flags):
