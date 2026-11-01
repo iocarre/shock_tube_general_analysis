@@ -252,9 +252,23 @@ def check_batch_args(ap, p, batch, flags):
 
 
 def ffmpeg_available():
-    """True if matplotlib can find an ffmpeg executable (needed for MP4)."""
+    """
+    True if matplotlib can find an ffmpeg executable (needed for MP4) and it
+    actually runs: a Homebrew ffmpeg whose libraries were upgraded under it
+    is found on the PATH but aborts at launch.
+    """
+    import subprocess
+    import matplotlib
     from matplotlib.animation import writers
-    return writers.is_available("ffmpeg")
+    if not writers.is_available("ffmpeg"):
+        return False
+    try:
+        subprocess.run([matplotlib.rcParams["animation.ffmpeg_path"],
+                        "-version"], capture_output=True, check=True,
+                       timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return True
 
 
 def run_shots(tag, shots, batch, process):
@@ -707,7 +721,10 @@ def valid_mask(bg, edge_margin, dark_frac=0.0):
     which the per-pixel Gaussian model cannot describe, so they are excluded,
     together with an ``edge_margin`` band around them (the steep lit/unlit
     boundary is as unreliable as the border). ``dark_frac <= 0`` keeps them.
+    The margin is capped at 1/16 of the frame's smaller side, so a thin strip
+    (e.g. 16 rows cropped around a tube) is not masked away entirely.
     """
+    edge_margin = min(int(edge_margin), min(bg.shape) // 16)
     mask = _edge_mask(bg.shape, edge_margin)
     if dark_frac and dark_frac > 0:
         unlit = bg < dark_frac * float(np.median(bg))

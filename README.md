@@ -371,8 +371,9 @@ them in `event_overview.classify` if your recordings call for it.
 - **Pillow** (PIL) — TIFF reading
 - **Matplotlib** — for the plots, timeline, treated frames and movies (all on by
   default)
-- **ffmpeg** — only for the MP4 movies; must be on `PATH`. Without it the movies
-  are skipped with a warning and everything else runs. Not a pip package:
+- **ffmpeg** — only for the MP4 movies; must be on `PATH`. Without it (or if it
+  is on `PATH` but fails to start) the movies are skipped with a warning and
+  everything else runs. Not a pip package:
   `brew install ffmpeg` (macOS) or `sudo apt install ffmpeg` (Debian/Ubuntu).
 
 No SciPy / OpenCV / tifffile required. Install the Python deps with:
@@ -518,7 +519,7 @@ python3 detect_activity.py RUN --pix-k 5 --smooth 7 --min-area 12
 | **Region of interest** | | |
 | `--row-lo` / `--row-hi` | all | Restrict the analysed rows. |
 | `--col-lo` / `--col-hi` | all | Restrict the analysed columns. |
-| `--edge-margin` | `6` | Pixels ignored at each border (unreliable optics edge). |
+| `--edge-margin` | `6` | Pixels ignored at each border (unreliable optics edge). Capped at 1/16 of the frame's smaller side, so a thin strip (e.g. 512×16 px cropped around the tube) keeps its rows. |
 | `--rotate` | `0` | Rotate frames clockwise by 0/90/180/270° after cropping (e.g. `90` to lay a vertical tube horizontally). Crop bounds stay in original-image coordinates; detection is unaffected, only output orientation changes. |
 | **Background / noise model** | | |
 | `--bg-sample` | `150` | Frames sampled uniformly to build the background. |
@@ -906,7 +907,7 @@ in the bore, that band is summed along the same track:
 |---|---|
 | `inside` | nothing significant outside the walls (score < 2.5): a front inside the tube |
 | `outside too` | significant outside (≥ 3.5) with at least half the bore's amplitude: a wave outside the tube, seen through it |
-| `unclear` | in between, or too little lit band along the track |
+| `unclear` | in between, or the band outside is lit on fewer than half the track points measured in the bore |
 | `tube moving` | the tube itself moved by ≥ 0.1 px across its axis during the track (flagged frames ignored: a flash fakes a one-frame shift): its walls sweep the bore's pixels, so the "front" may be nothing but the walls moving (overrides the others) |
 
 The tube's movement is measured in every frame: a rigid shift `d` across the
@@ -1077,8 +1078,10 @@ inflation is far above 1, the per-pixel noise is strongly correlated and a large
   directory path. For a campaign folder, the frames must sit directly inside
   each shot folder (shot folders can be nested at any depth; hidden folders
   and `*_analysis` folders are not searched).
-- **"ffmpeg not found, skipping the MP4 movies"** — install ffmpeg (see
-  [requirements](#installation--requirements)), or pass `--no-movie`.
+- **"ffmpeg not found or broken, skipping the MP4 movies"** — install ffmpeg (see
+  [requirements](#installation--requirements)), or pass `--no-movie`. If
+  `ffmpeg -version` fails with `Library not loaded` (a Homebrew library was
+  upgraded under it), run `brew upgrade ffmpeg`.
 - **A shot is "skipped" in batch mode** — its outputs already exist; delete them
   or pass `--force`.
 - **Speeds look wrong by a constant factor** — check `--px-size-um` and that

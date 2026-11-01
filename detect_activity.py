@@ -410,7 +410,9 @@ def inside_or_out(cands, tube_xt, sleeve_xt, flagged, xbin, shift=None):
         t, x = t[ok], x[ok]
         lit = seen_o[x] & (zo[t, x] != 0)          # zeroed: flagged frame
         used = zi[t, x] != 0
-        if lit.sum() < max(2, K // 2) or not used.any():
+        # compared with the bore's measured points, not K: a long flash
+        # (flagged frames) can hide much of the track in both
+        if lit.sum() < max(2, used.sum() // 2) or not used.any():
             c["outside_score"], c["where"] = None, "unclear"
             continue
         out = zo[t[lit], x[lit]]

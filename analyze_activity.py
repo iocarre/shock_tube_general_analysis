@@ -526,9 +526,9 @@ def resolve_outputs(p):
 
 
 def check_movie(p):
-    """Turn --movie off, with a warning, when ffmpeg cannot be found."""
+    """Turn --movie off, with a warning, when ffmpeg cannot be found or run."""
     if p.movie and not cc.ffmpeg_available():
-        print("[analyze] WARNING: ffmpeg not found, skipping the MP4 movies "
+        print("[analyze] WARNING: ffmpeg not found or broken, skipping the MP4 movies "
               "(install ffmpeg, or pass --no-movie to silence this)",
               file=sys.stderr)
         p.movie = False
